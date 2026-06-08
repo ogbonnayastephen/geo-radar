@@ -1,0 +1,65 @@
+"""
+Prompt templates for the Claude audit engine.
+
+Keeping prompts in one file means you can tune the tool's output quality
+without touching application logic. Edit the strings here, not radar.py.
+
+Discovery prompts live in discover.py alongside the discovery logic.
+"""
+
+# The system prompt sets Claude's role for every page audit call.
+AUDIT_SYSTEM_PROMPT = """You are an Answer Engine Optimization (AEO) and Generative \
+Engine Optimization (GEO) specialist. You analyze whether a web page is structured \
+to be cited by AI answer engines (ChatGPT, Perplexity, Google AI Overviews) for a \
+specific search query, then produce concrete fixes.
+
+You judge pages against the signals that actually drive AI citations:
+- Answer-first structure: the direct answer appears in the first 1-2 sentences, not buried.
+- Question-anchored headings: H2/H3 headings phrased as the questions people ask.
+- Evidence: specific statistics, dates, dollar amounts, named sources. Vague claims do not get cited.
+- Clear authorship and organization identity.
+- Extractable formatting: short paragraphs, tables for comparisons, lists for steps.
+- Schema markup (FAQPage, Organization, Service) that mirrors visible content.
+
+You are precise, you do not pad, and you never invent facts about the organization. \
+If the page lacks the information needed to answer the query, you say so and describe \
+what content must be created rather than fabricating it."""
+
+
+def build_audit_prompt(query: str, page_url: str, page_text: str, org_name: str) -> str:
+    """
+    Build the user prompt for a single page audit.
+    Truncates page text to ~3000 tokens to keep cost predictable.
+    """
+    trimmed = page_text[:12000]
+    return f"""Organization: {org_name}
+Target search query: "{query}"
+Page being audited: {page_url}
+
+--- PAGE CONTENT START ---
+{trimmed}
+--- PAGE CONTENT END ---
+
+Analyze this page for its ability to be cited by AI answer engines when someone \
+searches the target query above.
+
+Return ONLY a valid JSON object, no markdown fences, no preamble, with exactly these keys:
+
+{{
+  "readiness_score": <integer 0-100, how ready this page is to be cited for this query>,
+  "verdict": "<one sentence: the single biggest reason it would or would not be cited>",
+  "gaps": ["<specific gap 1>", "<specific gap 2>", "<specific gap 3>"],
+  "rewritten_section": "<an answer-first content block, 80-150 words, that directly \
+answers the query using only facts present in the page or clearly marked \
+[ORG TO CONFIRM: ...] where a fact is missing. Lead with the direct answer.>",
+  "suggested_headings": ["<question-phrased H2 1>", "<question-phrased H2 2>"],
+  "faq_schema": "<a complete, valid JSON-LD FAQPage schema as an escaped string, \
+with 2-3 Q&A pairs relevant to the query, ready to paste into a \
+<script type=\\"application/ld+json\\"> tag. Use only answers supported by the \
+page content or marked [ORG TO CONFIRM].>"
+}}
+
+Rules:
+- Output must be parseable by json.loads(). Escape all inner quotes and newlines correctly.
+- Never invent statistics, services, or claims. Mark anything uncertain as [ORG TO CONFIRM: ...].
+- The rewritten_section must lead with the answer in the first sentence."""

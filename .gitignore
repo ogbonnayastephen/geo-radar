@@ -1,0 +1,8 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+aeo_radar_results.csv
+.DS_Store
