@@ -15,6 +15,7 @@ same code runs locally (.env) and on Streamlit Cloud (secrets) without changes.
 
 import os
 import json
+import ipaddress
 import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -22,15 +23,16 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 import prompts
+from prompts import CLAUDE_MODEL
 
 # ---------------------------------------------------------------------------
 # Configuration — change models here if you want cheaper or stronger runs.
 # ---------------------------------------------------------------------------
 PERPLEXITY_MODEL    = "sonar"                  # cheapest Perplexity model with clean citations
 OPENAI_SEARCH_MODEL = "gpt-4o-search-preview"  # ChatGPT with built-in web search + citations
-CLAUDE_MODEL        = "claude-sonnet-4-6"       # best price/quality for content rewriting
 CLAUDE_MAX_TOKENS   = 1500
 REQUEST_TIMEOUT     = 45
+MAX_PAGE_BYTES      = 5 * 1024 * 1024          # refuse pages larger than 5 MB
 
 PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
 
@@ -153,6 +155,44 @@ def _citation_error(msg: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# SSRF GUARD — shared with crawler.py
+# ---------------------------------------------------------------------------
+def is_safe_url(url: str) -> tuple[bool, str]:
+    """
+    Return (True, '') if the URL is safe to fetch.
+    Return (False, reason) if it points to a private/reserved address.
+
+    Blocks: localhost, loopback, link-local (169.254.x), private RFC-1918
+    ranges, and any non-http(s) scheme. This prevents SSRF attacks where a
+    user-supplied URL is used to reach internal infrastructure.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Could not parse URL."
+
+    if parsed.scheme not in ("http", "https"):
+        return False, f"Scheme '{parsed.scheme}' is not allowed. Use http or https."
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, "URL has no hostname."
+
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return False, f"Requests to '{host}' are not allowed."
+
+    # If the hostname is a bare IP, check whether it's in a reserved range.
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return False, f"Requests to private/reserved IP '{host}' are not allowed."
+    except ValueError:
+        pass  # It's a normal hostname — OK to proceed.
+
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
 # 2. PAGE SCRAPE
 # ---------------------------------------------------------------------------
 def scrape_page(url: str) -> dict:
@@ -160,6 +200,10 @@ def scrape_page(url: str) -> dict:
     Fetch a URL and return clean readable text (scripts/styles/nav stripped).
     Returns: {ok, text, title, error}
     """
+    safe, reason = is_safe_url(url)
+    if not safe:
+        return {"ok": False, "text": "", "title": "", "error": f"Blocked URL: {reason}"}
+
     try:
         resp = requests.get(
             url,
@@ -169,6 +213,9 @@ def scrape_page(url: str) -> dict:
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         return {"ok": False, "text": "", "title": "", "error": f"Could not fetch page: {e}"}
+
+    if len(resp.content) > MAX_PAGE_BYTES:
+        return {"ok": False, "text": "", "title": "", "error": "Page too large to audit (> 5 MB)."}
 
     soup = BeautifulSoup(resp.text, "html.parser")
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg"]):
@@ -267,8 +314,8 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         result["verdict"] = "No page URL provided — citation check only."
         return result
 
-    not_cited_anywhere = not perplexity["cited"] or not chatgpt["cited"]
-    if not not_cited_anywhere:
+    cited_on_both = perplexity["cited"] and chatgpt["cited"]
+    if cited_on_both:
         result["verdict"] = "Cited on both platforms. No audit needed."
         return result
 

@@ -19,12 +19,13 @@ import time
 import requests
 from anthropic import Anthropic
 
+from prompts import CLAUDE_MODEL
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 GOOGLE_AUTOCOMPLETE_URL = "https://suggestqueries.google.com/complete/search"
 REDDIT_SEARCH_URL       = "https://www.reddit.com/search.json"
-CLAUDE_MODEL            = "claude-sonnet-4-6"
 REQUEST_TIMEOUT         = 10
 
 HEADERS_GOOGLE = {

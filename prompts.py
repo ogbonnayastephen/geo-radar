@@ -7,6 +7,10 @@ without touching application logic. Edit the strings here, not radar.py.
 Discovery prompts live in discover.py alongside the discovery logic.
 """
 
+# Single source of truth for the Claude model used across all modules.
+# Change it here and every module picks it up automatically.
+CLAUDE_MODEL = "claude-sonnet-4-6"
+
 # The system prompt sets Claude's role for every page audit call.
 AUDIT_SYSTEM_PROMPT = """You are an Answer Engine Optimization (AEO) and Generative \
 Engine Optimization (GEO) specialist. You analyze whether a web page is structured \

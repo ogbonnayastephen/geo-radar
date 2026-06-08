@@ -16,8 +16,10 @@ from anthropic import Anthropic
 import os
 import json
 
+from prompts import CLAUDE_MODEL
+from radar import is_safe_url
+
 REQUEST_TIMEOUT = 15
-CLAUDE_MODEL    = "claude-sonnet-4-6"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (AEO-Radar site crawler; research tool)"
@@ -56,6 +58,11 @@ def crawl_site(homepage_url: str, max_pages: int = 60, progress_callback=None) -
         if clean_url in visited:
             continue
         visited.add(clean_url)
+
+        # SSRF guard: skip any URL that resolves to a private/reserved address.
+        safe, _ = is_safe_url(url)
+        if not safe:
+            continue
 
         try:
             resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -180,12 +187,16 @@ Return ONLY valid JSON, no markdown fences, in this exact format:
     except Exception:
         return {q: "" for q in queries}
 
-    # Convert index back to URL
+    # Convert index back to URL. Guard against Claude returning unexpected types.
     result = {}
     for query, idx in matches.items():
-        if idx is not None and 0 <= int(idx) < len(pages):
-            result[query] = pages[int(idx)]["url"]
-        else:
+        if idx is None:
+            result[query] = ""
+            continue
+        try:
+            page_idx = int(idx)
+            result[query] = pages[page_idx]["url"] if 0 <= page_idx < len(pages) else ""
+        except (ValueError, TypeError):
             result[query] = ""
 
     progress("Matching complete.")

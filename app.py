@@ -96,7 +96,11 @@ with st.sidebar:
         help="Get yours at console.anthropic.com",
     )
 
-    # Inject keys into environment so radar/discover/crawler pick them up
+    # Inject keys into environment so radar/discover/crawler pick them up.
+    # NOTE: os.environ is process-global. This is safe for single-user or
+    # private deployments. On a shared multi-tenant server, concurrent
+    # sessions could read each other's keys. If that becomes a concern,
+    # refactor radar/crawler/discover to accept keys as explicit parameters.
     if perplexity_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_key
     if openai_key:
@@ -347,7 +351,12 @@ def parse_queries(raw: str):
             continue
         if "|" in line:
             q, url = line.split("|", 1)
-            items.append((q.strip(), url.strip()))
+            q   = q.strip()
+            url = url.strip()
+            # Normalise missing scheme so the scraper always receives a full URL.
+            if url and not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+            items.append((q, url))
         else:
             items.append((line, ""))
     return items
@@ -366,6 +375,9 @@ if run_btn:
     queries = parse_queries(st.session_state.query_text)
     if not queries:
         st.warning("Add at least one query in Step 3.")
+        st.stop()
+    if not org_name.strip():
+        st.warning("Enter your organization name in the sidebar.")
         st.stop()
     if not target_domains:
         st.warning("Add at least one domain in the sidebar.")
@@ -495,11 +507,11 @@ if st.session_state.audit_done and st.session_state.audit_results:
             r["perplexity_cited"],    r["perplexity_matched_url"],
             r["chatgpt_cited"],       r["chatgpt_matched_url"],
             r["readiness_score"],     r["verdict"],
-            " | ".join(r["gaps"]),
-            r["rewritten_section"],
-            " | ".join(r["suggested_headings"]),
-            " | ".join(r["perplexity_citations"]),
-            " | ".join(r["chatgpt_citations"]),
+            " | ".join(r.get("gaps") or []),
+            r.get("rewritten_section") or "",
+            " | ".join(r.get("suggested_headings") or []),
+            " | ".join(r.get("perplexity_citations") or []),
+            " | ".join(r.get("chatgpt_citations") or []),
         ])
 
     st.download_button(
