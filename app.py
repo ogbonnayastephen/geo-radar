@@ -471,6 +471,13 @@ if st.session_state.audit_done and st.session_state.audit_results:
 
                 if r["faq_schema"]:
                     st.markdown("**FAQ schema — paste into the page's `<head>`**")
+                    st.warning(
+                        "⚠️ Before pasting this code live: make sure every question and "
+                        "answer in the schema is also visible on the actual page. "
+                        "Google requires the schema to match what users can see. "
+                        "If any answer says [ORG TO CONFIRM], fill it in on the page first, "
+                        "then update the schema to match."
+                    )
                     st.code(r["faq_schema"], language="html")
 
     buffer = io.StringIO()

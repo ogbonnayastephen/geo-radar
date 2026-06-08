@@ -62,4 +62,11 @@ page content or marked [ORG TO CONFIRM].>"
 Rules:
 - Output must be parseable by json.loads(). Escape all inner quotes and newlines correctly.
 - Never invent statistics, services, or claims. Mark anything uncertain as [ORG TO CONFIRM: ...].
-- The rewritten_section must lead with the answer in the first sentence."""
+- The rewritten_section must lead with the answer in the first sentence.
+- CRITICAL SCHEMA RULE: Every question and answer in the faq_schema must only use information \
+that is explicitly visible in the page content provided. Do not include any answer that contains \
+[ORG TO CONFIRM] in the faq_schema. If an answer cannot be written from page content alone, \
+omit that Q&A pair entirely. A schema with two clean pairs is better than three pairs with \
+guessed answers.
+- The faq_schema answers must match word-for-word what a user would see on the page. \
+Google penalises schema that does not match visible content."""
