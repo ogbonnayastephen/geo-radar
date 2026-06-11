@@ -118,10 +118,16 @@ def build_seeds(services: str, audience: str, location: str) -> list[str]:
             seeds.append(f"help for {a} {short}")
             seeds.append(f"{a} resources {short}")
 
-    # Deduplicate while preserving order, cap at 8 seeds.
+    # Donor and volunteer seeds — without these Google/Reddit return only
+    # service-seeker queries and the donor/volunteer categories stay empty.
+    seeds.append(f"donate to help families {short}")
+    seeds.append(f"volunteer opportunities {short}")
+    seeds.append(f"how to support {short} nonprofits")
+
+    # Deduplicate while preserving order, cap at 12 seeds.
     seen = set()
     unique = [s for s in seeds if not (s.lower() in seen or seen.add(s.lower()))]
-    return unique[:8]
+    return unique[:12]
 
 
 # ---------------------------------------------------------------------------
