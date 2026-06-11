@@ -1,13 +1,13 @@
 """
-AEO Radar — Query Discovery Engine.
+GEO Radar — Query Discovery Engine.
 
 Finds real questions people ask using two data sources:
   1. Google autocomplete — live suggestions from billions of real searches.
   2. Reddit JSON search  — titles from real community posts.
 
-Claude then clusters and prioritizes the raw results by intent
-(people seeking help / donors / volunteers) so the team can pick
-the queries that matter most without doing keyword research manually.
+Claude then clusters and prioritizes the raw results by intent category
+so the team can pick the queries that matter most without doing keyword
+research manually.
 
 No paid APIs needed for discovery. Google autocomplete and Reddit
 search are both publicly accessible.
@@ -41,23 +41,15 @@ HEADERS_REDDIT = {"User-Agent": "AEO-Radar-Discovery/1.0 (research tool)"}
 # SYSTEM PROMPT — stays the same for every discovery call.
 # ---------------------------------------------------------------------------
 DISCOVERY_SYSTEM_PROMPT = """\
-You are an AEO (Answer Engine Optimization) strategist specializing in nonprofit
-and social services organizations. You take raw, messy search data scraped from
-Google and Reddit and transform it into a clean, prioritized set of queries the
-organization should optimize for.
+You are an AEO (Answer Engine Optimization) and GEO (Generative Engine Optimization) strategist. You take raw, messy search data scraped from Google and Reddit and transform it into a clean, prioritized set of queries a business should optimize for.
 
 Your job is to:
-1. Remove anything irrelevant to the organization's actual work.
+1. Remove anything irrelevant to the business's actual products or services.
 2. Remove duplicates — keep the clearest, most natural-sounding version.
-3. Group surviving queries by WHO is asking:
-   - people_seeking_help: someone who needs the service (highest AEO priority)
-   - donors_and_supporters: someone who wants to give money or advocate
-   - volunteers: someone who wants to give their time
-4. Phrase each query exactly as a real person would type it into ChatGPT or Google.
-   Short, natural, no jargon.
+3. Group surviving queries by WHO is asking, using the intent categories provided.
+4. Phrase each query exactly as a real person would type it into ChatGPT or Google. Short, natural, no jargon.
 
-You prioritize queries where the intent is specific enough that an AI search engine
-would cite a named organization (not just generic government sites)."""
+You prioritize queries where the intent is specific enough that an AI search engine would cite a named business (not just generic directory sites or Wikipedia)."""
 
 
 def build_discovery_prompt(
@@ -66,30 +58,34 @@ def build_discovery_prompt(
     services: str,
     audience: str,
     location: str,
+    categories: list[str],
 ) -> str:
+    categories_str = ", ".join(categories)
+    category_keys = {c: '["query 1", "query 2"]' for c in categories}
+    example_json = json.dumps(category_keys, indent=2).replace('"["query 1", "query 2"]"', '["query 1", "query 2"]')
     return f"""\
 Organization: {org_name}
 Services offered: {services}
-People served: {audience}
+Customers or audiences served: {audience}
 Location: {location}
+
+Intent categories to group queries into: {categories_str}
 
 Raw queries scraped from Google autocomplete and Reddit (unfiltered):
 {json.dumps(raw_queries, indent=2)}
 
-Clean, deduplicate, and group these into the most valuable AEO queries.
+Clean, deduplicate, and group these into the most valuable AEO/GEO queries.
 
-Return ONLY valid JSON, no markdown fences, no preamble, with this exact structure:
+Return ONLY valid JSON, no markdown fences, no preamble, with this exact structure (one key per category):
 {{
-  "people_seeking_help":  ["query 1", "query 2", "query 3"],
-  "donors_and_supporters": ["query 1", "query 2"],
-  "volunteers":           ["query 1", "query 2"]
+{chr(10).join(f'  "{c}": ["query 1", "query 2", "query 3"],' for c in categories)}
 }}
 
 Rules:
 - Maximum 8 queries per category. Fewer is fine if there is not enough quality data.
-- Every query must be phrased as a real person would type it — natural language.
-- Remove anything that is not clearly related to {org_name}'s actual services.
-- Prefer specific over vague. "emergency rent help in the Bronx" beats "help".
+- Every query must be phrased as a real person would type it — natural language, no jargon.
+- Remove anything not clearly related to {org_name}'s actual products or services.
+- Prefer specific over vague. "affordable web design for restaurants NYC" beats "web design".
 - If a category has no relevant queries in the data, return an empty list for it."""
 
 
@@ -118,11 +114,8 @@ def build_seeds(services: str, audience: str, location: str) -> list[str]:
             seeds.append(f"help for {a} {short}")
             seeds.append(f"{a} resources {short}")
 
-    # Donor and volunteer seeds — without these Google/Reddit return only
-    # service-seeker queries and the donor/volunteer categories stay empty.
-    seeds.append(f"donate to help families {short}")
-    seeds.append(f"volunteer opportunities {short}")
-    seeds.append(f"how to support {short} nonprofits")
+    seeds.append(f"best {services.split(',')[0].strip()} {short}")
+    seeds.append(f"{services.split(',')[0].strip()} near me")
 
     # Deduplicate while preserving order, cap at 12 seeds.
     seen = set()
@@ -203,18 +196,18 @@ def cluster_with_claude(
     services: str,
     audience: str,
     location: str,
+    categories: list[str],
 ) -> dict:
     """
     Send the raw scraped queries to Claude and ask it to cluster,
     deduplicate, and prioritize by intent.
-    Returns: {people_seeking_help, donors_and_supporters, volunteers, error}
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"error": "ANTHROPIC_API_KEY is not set."}
 
     client = Anthropic(api_key=api_key)
-    prompt = build_discovery_prompt(raw_queries, org_name, services, audience, location)
+    prompt = build_discovery_prompt(raw_queries, org_name, services, audience, location, categories)
 
     try:
         message = client.messages.create(
@@ -246,6 +239,7 @@ def discover_queries(
     services: str,
     audience: str,
     location: str,
+    categories: list[str] = None,
     progress_callback=None,
 ) -> dict:
     """
@@ -257,9 +251,10 @@ def discover_queries(
       5. Ask Claude to cluster and prioritize.
 
     progress_callback: optional callable(message: str) for UI updates.
-    Returns: {people_seeking_help, donors_and_supporters, volunteers, error,
-              raw_count, seeds_used}
+    Returns: {<category keys>, error, raw_count, seeds_used}
     """
+    if categories is None:
+        categories = ["customers", "partners", "media"]
     def progress(msg):
         if progress_callback:
             progress_callback(msg)
@@ -299,15 +294,10 @@ def discover_queries(
     progress(f"Collected {raw_count} real queries. Asking Claude to organize them...")
 
     if raw_count == 0:
-        return {
-            "error": "No queries found. Try broader service or audience terms.",
-            "people_seeking_help": [],
-            "donors_and_supporters": [],
-            "volunteers": [],
-        }
+        return {"error": "No queries found. Try broader service or audience terms."}
 
     # Claude clustering
-    clustered = cluster_with_claude(unique, org_name, services, audience, location)
+    clustered = cluster_with_claude(unique, org_name, services, audience, location, categories)
     clustered["raw_count"]  = raw_count
     clustered["seeds_used"] = seeds
     return clustered

@@ -1,5 +1,5 @@
 """
-AEO Radar — Streamlit UI.
+GEO Radar — Streamlit UI.
 
 Run locally:   streamlit run app.py
 Deploy:        push to GitHub, connect at share.streamlit.io.
@@ -28,7 +28,7 @@ import radar
 import discover
 import crawler
 
-st.set_page_config(page_title="AEO Radar", page_icon="📡", layout="wide")
+st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Session state defaults
@@ -49,7 +49,7 @@ for key, default in {
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
-st.title("📡 AEO Radar")
+st.title("📡 GEO Radar")
 st.caption(
     "Find real queries → crawl your site → check ChatGPT and Perplexity → "
     "get Claude's exact fixes to make your pages citable."
@@ -60,10 +60,10 @@ st.caption(
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Organization")
-    org_name = st.text_input("Organization name", value="United Way of NYC")
+    org_name = st.text_input("Organization name", value="Your Organization")
     domains_raw = st.text_input(
         "Your domains (comma-separated)",
-        value="unitedwaynyc.org, uwnyc.org",
+        value="yourdomain.com",
         help="Used to detect when a citation points to you. No https needed.",
     )
     target_domains = [d.strip() for d in domains_raw.split(",") if d.strip()]
@@ -172,16 +172,29 @@ with st.form("discovery_form"):
     with col1:
         services = st.text_input(
             "What services do you offer?",
-            placeholder="emergency rent help, food assistance, financial coaching",
+            placeholder="web design, SEO consulting, social media management",
         )
         audience = st.text_input(
             "Who do you serve?",
-            placeholder="low-income families, working poor, ALICE households",
+            placeholder="small businesses, startups, local brands",
         )
     with col2:
-        location = st.text_input("City or region", value="New York City")
+        location = st.text_input("City or region", value="")
+
+    st.markdown("**Intent categories** — who is searching for you?")
+    cat_col1, cat_col2, cat_col3 = st.columns(3)
+    with cat_col1:
+        cat1 = st.text_input("Category 1", value="customers", help="e.g. customers, buyers, patients")
+    with cat_col2:
+        cat2 = st.text_input("Category 2", value="partners")
+    with cat_col3:
+        cat3 = st.text_input("Category 3", value="media")
 
     discover_btn = st.form_submit_button("🔍 Find real queries", type="primary")
+
+categories = [c.strip().lower().replace(" ", "_") for c in [cat1, cat2, cat3] if c.strip()]
+if not categories:
+    categories = ["customers", "partners", "media"]
 
 if discover_btn:
     if not services or not audience:
@@ -198,6 +211,7 @@ if discover_btn:
                 services=services,
                 audience=audience,
                 location=location,
+                categories=categories,
                 progress_callback=update_progress,
             )
 
@@ -206,11 +220,8 @@ if discover_btn:
         if result.get("error"):
             st.error(f"Discovery failed: {result['error']}")
         else:
-            st.session_state.discovered = {
-                "people_seeking_help":   result.get("people_seeking_help", []),
-                "donors_and_supporters": result.get("donors_and_supporters", []),
-                "volunteers":            result.get("volunteers", []),
-            }
+            SKIP_KEYS = {"error", "raw_count", "seeds_used"}
+            st.session_state.discovered = {k: v for k, v in result.items() if k not in SKIP_KEYS and isinstance(v, list)}
             st.success(
                 f"Found {result.get('raw_count', 0)} real queries from Google and Reddit. "
                 "Claude organized the best ones below."
@@ -220,17 +231,13 @@ if discover_btn:
 if st.session_state.discovered:
     st.markdown("**Select the queries you want to audit:**")
 
-    intent_labels = {
-        "people_seeking_help":   "🆘 People seeking help",
-        "donors_and_supporters": "💛 Donors and supporters",
-        "volunteers":            "🤝 Volunteers",
-    }
-
+    discovered_keys = list(st.session_state.discovered.keys())
     selected_queries = []
-    cols = st.columns(3)
+    cols = st.columns(max(len(discovered_keys), 1))
 
-    for col_idx, (intent_key, label) in enumerate(intent_labels.items()):
+    for col_idx, intent_key in enumerate(discovered_keys):
         queries = st.session_state.discovered.get(intent_key, [])
+        label = intent_key.replace("_", " ").title()
         with cols[col_idx]:
             st.markdown(f"**{label}**")
             if queries:
@@ -259,7 +266,7 @@ st.write(
 
 homepage_url = st.text_input(
     "Homepage URL",
-    placeholder="https://unitedwaynyc.org",
+    placeholder="https://yourwebsite.com",
 )
 
 crawl_btn = st.button("🕷️ Crawl site and match pages", type="primary")
@@ -325,9 +332,9 @@ st.write(
     "Edit any URL, add missing ones, or add extra queries manually."
 )
 st.code(
-    "working poor NYC | https://unitedwaynyc.org/alice\n"
-    "ALICE households New York\n"
-    "emergency rent help Bronx | https://unitedwaynyc.org/get-help",
+    "affordable web design for restaurants | https://yourwebsite.com/services/web-design\n"
+    "SEO consulting for small businesses\n"
+    "social media management near me | https://yourwebsite.com/services/social-media",
     language=None,
 )
 
@@ -517,6 +524,6 @@ if st.session_state.audit_done and st.session_state.audit_results:
     st.download_button(
         "⬇️ Download full results as CSV",
         data=buffer.getvalue(),
-        file_name="aeo_radar_results.csv",
+        file_name="geo_radar_results.csv",
         mime="text/csv",
     )

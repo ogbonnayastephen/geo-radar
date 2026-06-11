@@ -1,5 +1,5 @@
 """
-AEO Radar — Site Crawler.
+GEO Radar — Site Crawler.
 
 Takes a homepage URL and maps every page on the site by following
 internal links. Then matches each query to the most relevant page

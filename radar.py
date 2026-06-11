@@ -1,5 +1,5 @@
 """
-AEO Radar — core engine.
+GEO Radar — core engine.
 
 Four jobs, four functions:
   1. check_citation_perplexity() -> ask Perplexity a query, check citations.
