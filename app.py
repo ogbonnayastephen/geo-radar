@@ -192,11 +192,14 @@ with st.form("discovery_form"):
 
     discover_btn = st.form_submit_button("🔍 Find real queries", type="primary")
 
-categories = [c.strip().lower().replace(" ", "_") for c in [cat1, cat2, cat3] if c.strip()]
-if not categories:
-    categories = ["customers", "partners", "media"]
-
 if discover_btn:
+    try:
+        categories = [c.strip().lower().replace(" ", "_") for c in [cat1, cat2, cat3] if c.strip()]
+    except Exception:
+        categories = ["customers", "partners", "media"]
+    if not categories:
+        categories = ["customers", "partners", "media"]
+
     if not services or not audience:
         st.warning("Fill in services and audience to discover queries.")
     else:
