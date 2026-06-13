@@ -1,125 +1,68 @@
-# 📡 AEO Radar
+# GEO Radar
 
-Check whether ChatGPT and Perplexity cite your organization for the queries
-that matter — then get Claude's exact fixes to make your pages citable.
+Automated AEO and GEO audit tool for any business, consultant, or agency.
 
-Built for nonprofits who can't afford a $2,000–$10,000/month AEO agency retainer.
-Runs on three AI APIs. Costs under $5/month at typical NGO usage.
+GEO Radar finds the real questions people ask about your topic, checks whether your organization is being cited on Perplexity and ChatGPT, and produces ready-to-use content fixes for every gap — in one run.
 
----
-
-## What it does
-
-**Step 1 — Discover real queries**
-Scrapes Google autocomplete and Reddit for questions real people actually type.
-Claude clusters and prioritizes them by intent: people seeking help, donors, volunteers.
-No keyword research needed. The team just picks from a list.
-
-**Step 2 — Review and add page URLs**
-Selected queries appear in a text area. Add the page you want cited after a `|`.
-
-**Step 3 — Run the audit**
-For each query:
-- Perplexity checks if you're cited in its AI search results.
-- ChatGPT checks if you're cited in its web search results.
-- If you're missing from either, Claude reads your page and returns:
-  - A readiness score (0–100)
-  - The specific gaps on your page
-  - An answer-first rewrite ready to paste in
-  - FAQ schema code ready to paste into your website's `<head>`
+**Live demo:** [geo-radar.streamlit.app](https://geo-radar.streamlit.app)
 
 ---
 
-## File map
+## How it works
 
-```
-aeo-radar/
-├── app.py            Streamlit UI — discovery, audit input, results, CSV export
-├── radar.py          Citation checks (Perplexity + ChatGPT) + Claude audit
-├── discover.py       Query discovery — Google scraping + Reddit + Claude clustering
-├── prompts.py        Claude prompt templates (tune output quality here)
-├── requirements.txt  Python dependencies
-├── .env.example      Copy to .env and add your API keys
-├── .gitignore        Keeps .env and secrets out of git
-└── README.md         This file
-```
+| Step | What happens |
+|------|-------------|
+| 1 | Scrapes real queries from Google autocomplete and Reddit |
+| 2 | Claude organizes them by your user-defined intent categories |
+| 3 | Crawls your website (up to 60 pages) |
+| 4 | Claude matches each query to the most relevant page |
+| 5 | Perplexity checks if you are cited for each query |
+| 6 | ChatGPT checks if you are cited for each query |
+| 7 | Claude scores each page and writes exact content fixes |
+| 8 | You get a full report with fixes ready to implement |
 
 ---
 
-## Setup (15 minutes)
-
-### 1. Get your three API keys
-
-**Perplexity** — https://www.perplexity.ai/settings/api
-**OpenAI (ChatGPT)** — https://platform.openai.com/api-keys
-**Anthropic (Claude)** — https://console.anthropic.com
-
-You will need to add a small credit balance to OpenAI ($5) and Anthropic ($5).
-Both are pay-as-you-go. No subscription required.
-
-### 2. Install Python (if you don't have it)
-
-Go to python.org/downloads and install Python 3.11 or higher.
-On Windows: check "Add Python to PATH" during installation.
-
-### 3. Set up the project
+## Getting started
 
 ```bash
-# Open a terminal and navigate to the project folder
-cd path/to/aeo-radar
-
-# Install dependencies
+git clone https://github.com/ogbonnayastephen/geo-radar.git
+cd geo-radar
 pip install -r requirements.txt
-
-# Add your API keys
-cp .env.example .env
-# Open .env in any text editor and paste your three keys in
-```
-
-### 4. Run it
-
-```bash
 streamlit run app.py
 ```
 
-Your browser opens automatically at http://localhost:8501.
+Enter your API keys in the sidebar when the app opens. Keys are never stored — they exist only for the duration of the session.
 
 ---
 
-## Deploy free (so the NGO team can use it without your laptop)
+## API keys required
 
-1. Push the folder to a GitHub repo. Do NOT push .env — .gitignore handles this.
-2. Go to share.streamlit.io, connect your GitHub repo, point it at app.py.
-3. In app Settings → Secrets, paste:
+| Service | Where to get it |
+|---------|----------------|
+| Perplexity | perplexity.ai/settings/api |
+| OpenAI | platform.openai.com/api-keys |
+| Anthropic | console.anthropic.com |
 
-```toml
-PERPLEXITY_API_KEY = "your_key"
-OPENAI_API_KEY     = "your_key"
-ANTHROPIC_API_KEY  = "your_key"
-```
-
-4. Click Deploy. Streamlit gives you a public URL the whole team can use.
-   Hosting is free. The team only pays for API usage.
+Each service requires a small credit balance ($5 each gets you started; at this tool's usage level, $5 lasts several months).
 
 ---
 
-## Monthly cost
+## Cost estimate
 
-| Usage | Cost/month |
-|---|---|
-| Discovery run (once) | ~$0.02 |
-| 20 queries, once a month | ~$1.20 |
-| 20 queries, weekly | ~$4.80 |
-| Streamlit hosting | $0 |
+| Usage | Estimated cost |
+|-------|---------------|
+| Discovery run | ~$0.02 |
+| 20 queries once/month | ~$1.20 |
+| 20 queries weekly | ~$4.80/month |
 
-All costs are pay-as-you-go. No contracts, no minimums.
+All costs come out of your own API accounts.
 
 ---
 
-## Honest limitations
+## Tech stack
 
-- **Google AI Overviews**: Google has no public API. The tool cannot verify live
-  Google AIO citations. It audits your page's *readiness* for Google instead.
-- **Citation guarantees**: No tool can force an AI to cite you. This improves
-  the probability significantly. Citations are ultimately each platform's call.
-- **Publishing**: The tool generates fixes. A human still pastes them into the website.
+- **UI:** Streamlit
+- **AI:** Anthropic SDK (`claude-sonnet-4-6`), OpenAI SDK (`gpt-4o-search-preview`), Perplexity Sonar API
+- **Scraping:** Requests, BeautifulSoup4
+- **Data:** Pandas
