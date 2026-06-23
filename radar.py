@@ -168,7 +168,7 @@ def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> 
     try:
         client   = google_genai.Client(api_key=keys.google)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=query,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
