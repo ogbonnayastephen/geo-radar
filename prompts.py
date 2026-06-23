@@ -27,12 +27,36 @@ You evaluate pages from the perspective of a potential customer or buyer who is 
 You are precise, you do not pad, and you never invent facts about the organization. If the page lacks the information needed to answer the query, you say so and describe what content must be created rather than fabricating it."""
 
 
-def build_audit_prompt(query: str, page_url: str, page_text: str, org_name: str) -> str:
+def build_audit_prompt(
+    query: str,
+    page_url: str,
+    page_text: str,
+    org_name: str,
+    competitor_snippets: list[dict] | None = None,
+) -> str:
     """
     Build the user prompt for a single page audit.
     Truncates page text to ~3000 tokens to keep cost predictable.
+    Optionally includes competitor page snippets (capped at 1500 chars each).
     """
     trimmed = page_text[:12000]
+
+    competitor_block = ""
+    if competitor_snippets:
+        parts = []
+        for c in competitor_snippets[:2]:
+            parts.append(
+                f"URL: {c['url']}\n{c['snippet'][:1500]}"
+            )
+        competitor_block = (
+            "\n\n--- COMPETITOR PAGES CURRENTLY BEING CITED INSTEAD ---\n"
+            + "\n\n---\n".join(parts)
+            + "\n--- END COMPETITOR PAGES ---\n"
+            "\nUse these to identify structural or content patterns that are earning"
+            " citations that your page is missing. Reference specific differences in"
+            " your gaps and rewritten_section."
+        )
+
     return f"""Organization: {org_name}
 Target search query: "{query}"
 Page being audited: {page_url}
@@ -40,7 +64,7 @@ Page being audited: {page_url}
 --- PAGE CONTENT START ---
 {trimmed}
 --- PAGE CONTENT END ---
-
+{competitor_block}
 Analyze this page for its ability to be cited by AI answer engines when someone \
 searches the target query above.
 

@@ -230,16 +230,24 @@ def scrape_page(url: str) -> dict:
 # ---------------------------------------------------------------------------
 # 3. CLAUDE AUDIT
 # ---------------------------------------------------------------------------
-def audit_page(query: str, page_url: str, page_text: str, org_name: str, keys: Keys) -> dict:
+def audit_page(
+    query: str,
+    page_url: str,
+    page_text: str,
+    org_name: str,
+    keys: Keys,
+    competitor_snippets: list[dict] | None = None,
+) -> dict:
     """
     Ask Claude to score the page and produce fixes (rewrite + schema).
+    Optionally includes competitor page snippets to ground the gap analysis.
     Returns the parsed JSON from the prompt, plus an "error" key.
     """
     if not keys.anthropic:
         return {"error": "Anthropic API key is not set."}
 
     client      = Anthropic(api_key=keys.anthropic)
-    user_prompt = prompts.build_audit_prompt(query, page_url, page_text, org_name)
+    user_prompt = prompts.build_audit_prompt(query, page_url, page_text, org_name, competitor_snippets)
 
     try:
         message = client.messages.create(
@@ -315,12 +323,29 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         result["verdict"] = "Cited on both platforms. No audit needed."
         return result
 
+    # Collect competitor URLs from citations (non-target domains, max 2 unique)
+    all_cit = list(perplexity.get("all_citations", [])) + list(chatgpt.get("all_citations", []))
+    competitor_snippets = []
+    seen_comp_domains: set[str] = set()
+    for url in all_cit:
+        if any(d.lower() in url.lower() for d in target_domains):
+            continue
+        dom = domain_from_url(url)
+        if dom in seen_comp_domains:
+            continue
+        seen_comp_domains.add(dom)
+        comp = scrape_page(url)
+        if comp["ok"]:
+            competitor_snippets.append({"url": url, "snippet": comp["text"]})
+        if len(competitor_snippets) >= 2:
+            break
+
     scraped = scrape_page(page_url)
     if not scraped["ok"]:
         result["error"] = scraped["error"]
         return result
 
-    audit = audit_page(query, page_url, scraped["text"], org_name, keys)
+    audit = audit_page(query, page_url, scraped["text"], org_name, keys, competitor_snippets or None)
     if audit.get("error"):
         result["error"] = audit["error"]
         return result
