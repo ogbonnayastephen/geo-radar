@@ -26,7 +26,10 @@ load_dotenv()
 import radar
 import discover
 import crawler
+import db
 from config import Keys
+
+db.init()
 
 st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 
@@ -409,9 +412,10 @@ if run_btn:
 
     progress.progress(1.0, text="Running synthesis...")
     synthesis = radar.synthesize_results(results, org_name, keys)
-    st.session_state.audit_results  = results
+    st.session_state.audit_results   = results
     st.session_state.audit_synthesis = synthesis
-    st.session_state.audit_done     = True
+    st.session_state.audit_done      = True
+    db.save_run(org_name, results, synthesis if not synthesis.get("error") else None)
 
 if st.session_state.audit_done and st.session_state.audit_results:
     results   = st.session_state.audit_results
@@ -553,3 +557,23 @@ if st.session_state.audit_done and st.session_state.audit_results:
         file_name="geo_radar_results.csv",
         mime="text/csv",
     )
+
+# ---------------------------------------------------------------------------
+# HISTORY — past runs for this org
+# ---------------------------------------------------------------------------
+st.divider()
+with st.expander("📈 Citation history for this organization"):
+    history = db.get_history(org_name)
+    if not history:
+        st.info("No past runs found. Run an audit to start tracking citation rates over time.")
+    else:
+        history_rows = []
+        for row in history:
+            rate = round(row["cited_count"] / row["query_count"] * 100) if row["query_count"] else 0
+            history_rows.append({
+                "Date":          row["created_at"][:10],
+                "Queries":       row["query_count"],
+                "Cited":         row["cited_count"],
+                "Citation rate": f"{rate}%",
+            })
+        st.dataframe(pd.DataFrame(history_rows), use_container_width=True, hide_index=True)
