@@ -9,11 +9,9 @@ Four jobs, four functions:
 
 run_audit() ties all four together for one query and returns one clean result dict.
 
-No API keys live in this file. Keys are read from environment variables so the
-same code runs locally (.env) and on Streamlit Cloud (secrets) without changes.
+Keys are passed explicitly as a Keys dataclass — no global os.environ mutation.
 """
 
-import os
 import json
 import ipaddress
 import requests
@@ -24,6 +22,7 @@ from openai import OpenAI
 
 import prompts
 from prompts import CLAUDE_MODEL
+from config import Keys
 
 # ---------------------------------------------------------------------------
 # Configuration — change models here if you want cheaper or stronger runs.
@@ -40,17 +39,16 @@ PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
 # ---------------------------------------------------------------------------
 # 1a. PERPLEXITY CITATION CHECK
 # ---------------------------------------------------------------------------
-def check_citation_perplexity(query: str, target_domains: list[str]) -> dict:
+def check_citation_perplexity(query: str, target_domains: list[str], keys: Keys) -> dict:
     """
     Ask Perplexity the query and check whether any target domain appears
     in the answer's citations.
     Returns: {cited, matched_url, all_citations, answer, error}
     """
-    api_key = os.environ.get("PERPLEXITY_API_KEY")
-    if not api_key:
-        return _citation_error("PERPLEXITY_API_KEY is not set.")
+    if not keys.perplexity:
+        return _citation_error("Perplexity API key is not set.")
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {keys.perplexity}", "Content-Type": "application/json"}
     payload = {
         "model": PERPLEXITY_MODEL,
         "messages": [{"role": "user", "content": query}],
@@ -94,17 +92,16 @@ def check_citation_perplexity(query: str, target_domains: list[str]) -> dict:
 # ---------------------------------------------------------------------------
 # 1b. CHATGPT CITATION CHECK
 # ---------------------------------------------------------------------------
-def check_citation_chatgpt(query: str, target_domains: list[str]) -> dict:
+def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) -> dict:
     """
     Ask ChatGPT (gpt-4o-search-preview) the query and check whether any
     target domain appears in the answer's url_citation annotations.
     Returns: {cited, matched_url, all_citations, answer, error}
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return _citation_error("OPENAI_API_KEY is not set.")
+    if not keys.openai:
+        return _citation_error("OpenAI API key is not set.")
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=keys.openai)
 
     try:
         response = client.chat.completions.create(
@@ -233,16 +230,15 @@ def scrape_page(url: str) -> dict:
 # ---------------------------------------------------------------------------
 # 3. CLAUDE AUDIT
 # ---------------------------------------------------------------------------
-def audit_page(query: str, page_url: str, page_text: str, org_name: str) -> dict:
+def audit_page(query: str, page_url: str, page_text: str, org_name: str, keys: Keys) -> dict:
     """
     Ask Claude to score the page and produce fixes (rewrite + schema).
     Returns the parsed JSON from the prompt, plus an "error" key.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return {"error": "ANTHROPIC_API_KEY is not set."}
+    if not keys.anthropic:
+        return {"error": "Anthropic API key is not set."}
 
-    client      = Anthropic(api_key=api_key)
+    client      = Anthropic(api_key=keys.anthropic)
     user_prompt = prompts.build_audit_prompt(query, page_url, page_text, org_name)
 
     try:
@@ -270,7 +266,7 @@ def audit_page(query: str, page_url: str, page_text: str, org_name: str) -> dict
 # ---------------------------------------------------------------------------
 # ORCHESTRATION — one query end to end.
 # ---------------------------------------------------------------------------
-def run_audit(query: str, page_url: str, target_domains: list[str], org_name: str) -> dict:
+def run_audit(query: str, page_url: str, target_domains: list[str], org_name: str, keys: Keys) -> dict:
     """
     Full pipeline for a single query:
       Perplexity check + ChatGPT check -> (if page URL given) scrape -> Claude audit.
@@ -296,8 +292,8 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         "error":                  None,
     }
 
-    perplexity = check_citation_perplexity(query, target_domains)
-    chatgpt    = check_citation_chatgpt(query, target_domains)
+    perplexity = check_citation_perplexity(query, target_domains, keys)
+    chatgpt    = check_citation_chatgpt(query, target_domains, keys)
 
     result["perplexity_cited"]       = perplexity["cited"]
     result["perplexity_matched_url"] = perplexity["matched_url"]
@@ -324,7 +320,7 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         result["error"] = scraped["error"]
         return result
 
-    audit = audit_page(query, page_url, scraped["text"], org_name)
+    audit = audit_page(query, page_url, scraped["text"], org_name, keys)
     if audit.get("error"):
         result["error"] = audit["error"]
         return result

@@ -16,7 +16,6 @@ Four-step workflow:
 
 import io
 import csv
-import os
 import time
 import pandas as pd
 import streamlit as st
@@ -27,6 +26,7 @@ load_dotenv()
 import radar
 import discover
 import crawler
+from config import Keys
 
 st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 
@@ -95,18 +95,19 @@ with st.sidebar:
         placeholder="Paste your Anthropic key here",
         help="Get yours at console.anthropic.com",
     )
+    google_key = st.text_input(
+        "Google AI API key (optional)",
+        type="password",
+        placeholder="Enables Google AI Overview check",
+        help="Get yours at aistudio.google.com — adds a third citation platform.",
+    )
 
-    # Inject keys into environment so radar/discover/crawler pick them up.
-    # NOTE: os.environ is process-global. This is safe for single-user or
-    # private deployments. On a shared multi-tenant server, concurrent
-    # sessions could read each other's keys. If that becomes a concern,
-    # refactor radar/crawler/discover to accept keys as explicit parameters.
-    if perplexity_key:
-        os.environ["PERPLEXITY_API_KEY"] = perplexity_key
-    if openai_key:
-        os.environ["OPENAI_API_KEY"] = openai_key
-    if anthropic_key:
-        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+    keys = Keys(
+        anthropic=anthropic_key,
+        openai=openai_key,
+        perplexity=perplexity_key,
+        google=google_key,
+    )
 
     keys_ready = all([perplexity_key, openai_key, anthropic_key])
 
@@ -124,6 +125,7 @@ with st.sidebar:
     st.markdown(
         "🔵 Perplexity — citation check  \n"
         "🟢 ChatGPT — citation check  \n"
+        "🔴 Google AI — citation check (optional)  \n"
         "🟠 Claude — discovery, matching + audit"
     )
     st.divider()
@@ -216,6 +218,7 @@ if discover_btn:
                 location=location,
                 categories=categories,
                 progress_callback=update_progress,
+                keys=keys,
             )
 
         progress_placeholder.empty()
@@ -292,6 +295,7 @@ if crawl_btn:
                 homepage_url=homepage_url,
                 queries=selected,
                 org_name=org_name,
+                keys=keys,
                 max_pages=60,
                 progress_callback=crawl_progress,
             )
@@ -398,7 +402,7 @@ if run_btn:
 
     for i, (query, page_url) in enumerate(queries):
         progress.progress(i / len(queries), text=f"Checking: {query}")
-        result = radar.run_audit(query, page_url, target_domains, org_name)
+        result = radar.run_audit(query, page_url, target_domains, org_name, keys)
         results.append(result)
         time.sleep(0.3)
 

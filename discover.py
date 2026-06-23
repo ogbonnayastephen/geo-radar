@@ -13,13 +13,13 @@ No paid APIs needed for discovery. Google autocomplete and Reddit
 search are both publicly accessible.
 """
 
-import os
 import json
 import time
 import requests
 from anthropic import Anthropic
 
 from prompts import CLAUDE_MODEL
+from config import Keys
 
 # ---------------------------------------------------------------------------
 # Config
@@ -197,16 +197,16 @@ def cluster_with_claude(
     audience: str,
     location: str,
     categories: list[str],
+    keys: Keys,
 ) -> dict:
     """
     Send the raw scraped queries to Claude and ask it to cluster,
     deduplicate, and prioritize by intent.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return {"error": "ANTHROPIC_API_KEY is not set."}
+    if not keys.anthropic:
+        return {"error": "Anthropic API key is not set."}
 
-    client = Anthropic(api_key=api_key)
+    client = Anthropic(api_key=keys.anthropic)
     prompt = build_discovery_prompt(raw_queries, org_name, services, audience, location, categories)
 
     try:
@@ -241,6 +241,7 @@ def discover_queries(
     location: str,
     categories: list[str] = None,
     progress_callback=None,
+    keys: Keys = None,
 ) -> dict:
     """
     Full pipeline:
@@ -297,7 +298,7 @@ def discover_queries(
         return {"error": "No queries found. Try broader service or audience terms."}
 
     # Claude clustering
-    clustered = cluster_with_claude(unique, org_name, services, audience, location, categories)
+    clustered = cluster_with_claude(unique, org_name, services, audience, location, categories, keys)
     clustered["raw_count"]  = raw_count
     clustered["seeds_used"] = seeds
     return clustered

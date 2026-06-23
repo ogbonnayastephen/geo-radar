@@ -9,15 +9,15 @@ Uses only requests + BeautifulSoup — no extra dependencies needed.
 """
 
 import time
+import json
 import requests
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from anthropic import Anthropic
-import os
-import json
 
 from prompts import CLAUDE_MODEL
 from radar import is_safe_url
+from config import Keys
 
 REQUEST_TIMEOUT = 15
 
@@ -124,6 +124,7 @@ def match_queries_to_pages(
     queries: list[str],
     pages: list[dict],
     org_name: str,
+    keys: Keys,
     progress_callback=None,
 ) -> dict[str, str]:
     """
@@ -137,11 +138,10 @@ def match_queries_to_pages(
         if progress_callback:
             progress_callback(msg)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not keys.anthropic:
         return {q: "" for q in queries}
 
-    client = Anthropic(api_key=api_key)
+    client = Anthropic(api_key=keys.anthropic)
 
     # Build a compact site map for Claude to reason over
     site_map = []
@@ -210,6 +210,7 @@ def map_site_and_match(
     homepage_url: str,
     queries: list[str],
     org_name: str,
+    keys: Keys,
     max_pages: int = 60,
     progress_callback=None,
 ) -> dict:
@@ -232,7 +233,7 @@ def map_site_and_match(
             "error":   "Could not crawl the site. Check the URL and try again.",
         }
 
-    matches = match_queries_to_pages(queries, pages, org_name, progress_callback=progress_callback)
+    matches = match_queries_to_pages(queries, pages, org_name, keys, progress_callback=progress_callback)
 
     return {
         "matches": matches,
