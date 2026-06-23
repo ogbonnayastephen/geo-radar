@@ -34,14 +34,15 @@ st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 # Session state defaults
 # ---------------------------------------------------------------------------
 for key, default in {
-    "discovered":       {},
-    "query_text":       "",
-    "audit_done":       False,
-    "audit_results":    [],
-    "crawled_pages":    [],
-    "page_matches":     {},
+    "discovered":        {},
+    "query_text":        "",
+    "audit_done":        False,
+    "audit_results":     [],
+    "audit_synthesis":   {},
+    "crawled_pages":     [],
+    "page_matches":      {},
     "selected_for_crawl": [],
-    "keys_set":         False,
+    "keys_set":          False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -406,12 +407,15 @@ if run_btn:
         results.append(result)
         time.sleep(0.3)
 
-    progress.progress(1.0, text="Done.")
-    st.session_state.audit_results = results
-    st.session_state.audit_done    = True
+    progress.progress(1.0, text="Running synthesis...")
+    synthesis = radar.synthesize_results(results, org_name, keys)
+    st.session_state.audit_results  = results
+    st.session_state.audit_synthesis = synthesis
+    st.session_state.audit_done     = True
 
 if st.session_state.audit_done and st.session_state.audit_results:
-    results = st.session_state.audit_results
+    results   = st.session_state.audit_results
+    synthesis = st.session_state.get("audit_synthesis", {})
 
     st.divider()
     st.subheader("Step 4 — Results")
@@ -440,6 +444,21 @@ if st.session_state.audit_done and st.session_state.audit_results:
         })
 
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+    # Synthesis panel
+    if synthesis and not synthesis.get("error"):
+        st.divider()
+        st.markdown("### Strategic diagnosis")
+        st.caption("Root causes across all queries — not per-page symptoms.")
+        col_rc, col_pf = st.columns(2)
+        with col_rc:
+            st.markdown("**Root causes**")
+            for cause in synthesis.get("root_causes", []):
+                st.markdown(f"- {cause}")
+        with col_pf:
+            st.markdown("**Priority fixes (highest impact first)**")
+            for i, fix in enumerate(synthesis.get("priority_fixes", []), 1):
+                st.markdown(f"{i}. {fix}")
 
     needs_fixes = [
         r for r in results

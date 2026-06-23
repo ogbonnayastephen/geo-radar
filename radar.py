@@ -363,3 +363,79 @@ def domain_from_url(url: str) -> str:
     """Helper: pull a bare domain (no www.) from a URL for matching."""
     netloc = urlparse(url if "://" in url else f"https://{url}").netloc
     return netloc.replace("www.", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# SYNTHESIS — cross-query root cause analysis.
+# ---------------------------------------------------------------------------
+def synthesize_results(results: list[dict], org_name: str, keys: Keys) -> dict:
+    """
+    Single Claude call that reads all audit results and identifies the root
+    causes of citation failures across queries — not per-query symptoms.
+    Returns: {root_causes, priority_fixes, citation_rate, error}
+    """
+    if not keys.anthropic:
+        return {"error": "Anthropic API key is not set."}
+
+    audited = [r for r in results if not r.get("error") and r.get("readiness_score") is not None]
+    if not audited:
+        return {"error": "No audited results to synthesize."}
+
+    total   = len([r for r in results if r.get("perplexity_cited") is not None])
+    cited   = sum(1 for r in results if r.get("perplexity_cited") or r.get("chatgpt_cited"))
+    rate    = round(cited / total * 100) if total else 0
+
+    summary_lines = []
+    for r in results:
+        p = "✅" if r.get("perplexity_cited") else "❌"
+        g = "✅" if r.get("chatgpt_cited") else "❌"
+        score = r.get("readiness_score", "—")
+        verdict = r.get("verdict", "")
+        gaps = "; ".join(r.get("gaps") or [])
+        summary_lines.append(
+            f'Query: "{r["query"]}"\n'
+            f'  Perplexity: {p}  ChatGPT: {g}  Score: {score}/100\n'
+            f'  Verdict: {verdict}\n'
+            f'  Gaps: {gaps}'
+        )
+
+    prompt = f"""You are reviewing a full AEO/GEO audit for {org_name}.
+Overall citation rate: {cited}/{total} queries cited on at least one platform ({rate}%).
+
+Here are all query-level results:
+
+{chr(10).join(summary_lines)}
+
+Identify the SYSTEMIC root causes — the underlying reasons this site is not being cited
+across multiple queries. Do not repeat per-query verdicts. Look for patterns.
+
+Return ONLY valid JSON, no markdown, with exactly these keys:
+{{
+  "root_causes": [
+    "<root cause 1 — a pattern seen across multiple queries, not just one>",
+    "<root cause 2>",
+    "<root cause 3>"
+  ],
+  "priority_fixes": [
+    "<the single highest-impact change that would unlock the most citations>",
+    "<second fix>",
+    "<third fix>"
+  ],
+  "citation_rate": {rate}
+}}"""
+
+    try:
+        client  = Anthropic(api_key=keys.anthropic)
+        message = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].replace("json", "", 1).strip()
+        parsed = json.loads(raw)
+        parsed["error"] = None
+        return parsed
+    except Exception as e:
+        return {"error": f"Synthesis failed: {e}"}
