@@ -149,39 +149,52 @@ def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) ->
 
 def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> dict:
     """
-    Ask Gemini (with Google Search grounding) the query and check whether any
-    target domain appears in the grounding citations.
-    This is the closest public proxy to Google AI Overview citations.
+    Ask Gemini 2.0 Flash (with Google Search grounding) the query and check
+    whether any target domain appears in the grounding citations.
+    Uses the google-genai package — the current official SDK for Gemini 2.0.
     Returns: {cited, matched_url, all_citations, answer, error}
     """
     if not keys.google:
         return _citation_error("No Google API key provided.")
 
     try:
-        import google.generativeai as genai
+        from google import genai as google_genai
+        from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
     except ImportError:
-        return _citation_error("google-generativeai not installed. Run: pip install 'google-generativeai>=0.8.0'")
+        return _citation_error(
+            "google-genai not installed. Run: pip install -r requirements.txt"
+        )
 
     try:
-        genai.configure(api_key=keys.google)
-        search_tool = genai.protos.Tool(
-            google_search=genai.protos.Tool.GoogleSearch()
+        client   = google_genai.Client(api_key=keys.google)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=query,
+            config=GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())],
+                response_modalities=["TEXT"],
+            ),
         )
-        model    = genai.GenerativeModel(model_name="gemini-2.0-flash", tools=[search_tool])
-        response = model.generate_content(query)
     except Exception as e:
         return _citation_error(f"Gemini API error: {e}")
 
     try:
-        answer    = response.text or ""
+        answer    = ""
         citations = []
-        metadata  = getattr(response.candidates[0], "grounding_metadata", None)
-        if metadata:
-            for chunk in getattr(metadata, "grounding_chunks", []):
-                web = getattr(chunk, "web", None)
-                uri = getattr(web, "uri", "") if web else ""
-                if uri:
-                    citations.append(uri)
+
+        for candidate in getattr(response, "candidates", []):
+            # Extract answer text
+            for part in getattr(candidate.content, "parts", []):
+                answer = answer or getattr(part, "text", "")
+
+            # Extract grounding citations
+            metadata = getattr(candidate, "grounding_metadata", None)
+            if metadata:
+                for chunk in getattr(metadata, "grounding_chunks", []):
+                    web = getattr(chunk, "web", None)
+                    uri = getattr(web, "uri", "") if web else ""
+                    if uri:
+                        citations.append(uri)
 
         seen      = set()
         citations = [u for u in citations if not (u in seen or seen.add(u))]
@@ -193,14 +206,14 @@ def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> 
         )
 
         return {
-            "cited":        matched is not None,
-            "matched_url":  matched,
+            "cited":         matched is not None,
+            "matched_url":   matched,
             "all_citations": citations,
-            "answer":       answer,
-            "error":        None,
+            "answer":        answer,
+            "error":         None,
         }
     except Exception as e:
-        return _citation_error(f"Google Gemini response parsing failed: {e}")
+        return _citation_error(f"Gemini response parsing failed: {e}")
 
 
 def _citation_error(msg: str) -> dict:
