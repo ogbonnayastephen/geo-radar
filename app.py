@@ -386,6 +386,18 @@ def citation_badge(cited) -> str:
     return "✅ Cited" if cited else "❌ Not cited"
 
 
+def google_badge(r: dict) -> str:
+    cited = r.get("google_cited")
+    if cited is True:
+        return "✅ Cited"
+    if cited is False:
+        return "❌ Not cited"
+    error = r.get("google_error", "")
+    if error and "No Google API key" not in error:
+        return "⚠️ Error"
+    return "⚑ No key"
+
+
 # ---------------------------------------------------------------------------
 # STEP 4 — RUN AND RESULTS
 # ---------------------------------------------------------------------------
@@ -445,7 +457,7 @@ if st.session_state.audit_done and st.session_state.audit_results:
             "Query":      r["query"],
             "Perplexity": citation_badge(r["perplexity_cited"]),
             "ChatGPT":    citation_badge(r["chatgpt_cited"]),
-            "Google AI":  citation_badge(r.get("google_cited")),
+            "Google AI":  google_badge(r),
             "Readiness":  r["readiness_score"] if r["readiness_score"] is not None else "—",
             "Verdict":    r["verdict"] if not r["error"] else f"⚠️ {r['error']}",
         })
