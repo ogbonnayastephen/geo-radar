@@ -155,20 +155,22 @@ def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> 
     Returns: {cited, matched_url, all_citations, answer, error}
     """
     if not keys.google:
-        return _citation_error("Google API key not provided — skipping Google AI check.")
+        return _citation_error("No Google API key provided.")
 
     try:
         import google.generativeai as genai
-        genai.configure(api_key=keys.google)
-        model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            tools=[{"google_search": {}}],
-        )
-        response = model.generate_content(query)
     except ImportError:
-        return _citation_error("google-generativeai package not installed. Run: pip install google-generativeai")
+        return _citation_error("google-generativeai not installed. Run: pip install 'google-generativeai>=0.8.0'")
+
+    try:
+        genai.configure(api_key=keys.google)
+        search_tool = genai.protos.Tool(
+            google_search=genai.protos.Tool.GoogleSearch()
+        )
+        model    = genai.GenerativeModel(model_name="gemini-2.0-flash", tools=[search_tool])
+        response = model.generate_content(query)
     except Exception as e:
-        return _citation_error(f"Google Gemini request failed: {e}")
+        return _citation_error(f"Gemini API error: {e}")
 
     try:
         answer    = response.text or ""
@@ -348,6 +350,7 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         "google_cited":           None,
         "google_matched_url":     None,
         "google_citations":       [],
+        "google_error":           None,
         "readiness_score":        None,
         "verdict":                "",
         "gaps":                   [],
@@ -370,6 +373,7 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
     result["google_cited"]           = google["cited"]
     result["google_matched_url"]     = google["matched_url"]
     result["google_citations"]       = google["all_citations"]
+    result["google_error"]           = google["error"]
 
     if perplexity["error"] and chatgpt["error"]:
         result["error"] = f"Perplexity: {perplexity['error']} | ChatGPT: {chatgpt['error']}"
