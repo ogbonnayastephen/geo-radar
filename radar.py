@@ -30,7 +30,7 @@ from prompts import CLAUDE_MODEL
 # ---------------------------------------------------------------------------
 PERPLEXITY_MODEL    = "sonar"                  # cheapest Perplexity model with clean citations
 OPENAI_SEARCH_MODEL = "gpt-4o-search-preview"  # ChatGPT with built-in web search + citations
-CLAUDE_MAX_TOKENS   = 1500
+CLAUDE_MAX_TOKENS   = 2500
 REQUEST_TIMEOUT     = 45
 MAX_PAGE_BYTES      = 5 * 1024 * 1024          # refuse pages larger than 5 MB
 
