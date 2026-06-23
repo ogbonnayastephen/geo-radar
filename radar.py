@@ -147,11 +147,46 @@ def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) ->
         return _citation_error(f"ChatGPT response parsing failed: {e}")
 
 
+# Module-level cache so model resolution runs once per process, not per query.
+_gemini_model_cache: str | None = None
+
+
+def _resolve_gemini_model(client) -> str:
+    """
+    Query the Gemini models list and return the best available Flash model.
+    Prefers stable releases over previews. Cached after the first call so
+    subsequent queries in the same session never hit the list endpoint again.
+    Falls back to 'gemini-2.5-flash' if the list call fails.
+    """
+    global _gemini_model_cache
+    if _gemini_model_cache:
+        return _gemini_model_cache
+
+    try:
+        all_flash = [
+            m.name.removeprefix("models/")
+            for m in client.models.list()
+            if "gemini" in m.name and "flash" in m.name
+        ]
+        # Prefer stable builds; fall back to preview/exp if nothing else exists
+        stable = [m for m in all_flash if "preview" not in m and "exp" not in m]
+        candidates = sorted(stable or all_flash, reverse=True)
+        if candidates:
+            _gemini_model_cache = candidates[0]
+            return _gemini_model_cache
+    except Exception:
+        pass
+
+    _gemini_model_cache = "gemini-2.5-flash"
+    return _gemini_model_cache
+
+
 def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> dict:
     """
-    Ask Gemini 2.0 Flash (with Google Search grounding) the query and check
-    whether any target domain appears in the grounding citations.
-    Uses the google-genai package — the current official SDK for Gemini 2.0.
+    Ask Gemini (with Google Search grounding) the query and check whether any
+    target domain appears in the grounding citations.
+    Model is resolved dynamically from the API so deprecated models never
+    cause failures — the latest available Flash model is always used.
     Returns: {cited, matched_url, all_citations, answer, error}
     """
     if not keys.google:
@@ -166,9 +201,10 @@ def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> 
         )
 
     try:
-        client   = google_genai.Client(api_key=keys.google)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
+        client     = google_genai.Client(api_key=keys.google)
+        model_name = _resolve_gemini_model(client)
+        response   = client.models.generate_content(
+            model=model_name,
             contents=query,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
