@@ -481,17 +481,23 @@ if st.session_state.audit_done and st.session_state.audit_results:
 
     needs_fixes = [
         r for r in results
-        if not r["error"] and (not r["perplexity_cited"] or not r["chatgpt_cited"])
+        if not r["error"] and (
+            not r["perplexity_cited"]
+            or not r["chatgpt_cited"]
+            or r.get("google_cited") is False
+        )
     ]
 
     if needs_fixes:
         st.markdown("### Fixes")
         for r in needs_fixes:
             score = f"  ·  readiness {r['readiness_score']}/100" if r["readiness_score"] else ""
+            google_part = f"   Google AI {google_badge(r)}" if r.get("google_cited") is not None or r.get("google_error") else ""
             label = (
                 f"{r['query']}   |   "
                 f"Perplexity {citation_badge(r['perplexity_cited'])}   "
-                f"ChatGPT {citation_badge(r['chatgpt_cited'])}{score}"
+                f"ChatGPT {citation_badge(r['chatgpt_cited'])}"
+                f"{google_part}{score}"
             )
             with st.expander(label):
                 col_p, col_g, col_gg = st.columns(3)
