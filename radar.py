@@ -147,6 +147,60 @@ def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) ->
         return _citation_error(f"ChatGPT response parsing failed: {e}")
 
 
+def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> dict:
+    """
+    Ask Gemini (with Google Search grounding) the query and check whether any
+    target domain appears in the grounding citations.
+    This is the closest public proxy to Google AI Overview citations.
+    Returns: {cited, matched_url, all_citations, answer, error}
+    """
+    if not keys.google:
+        return _citation_error("Google API key not provided — skipping Google AI check.")
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=keys.google)
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            tools=[{"google_search": {}}],
+        )
+        response = model.generate_content(query)
+    except ImportError:
+        return _citation_error("google-generativeai package not installed. Run: pip install google-generativeai")
+    except Exception as e:
+        return _citation_error(f"Google Gemini request failed: {e}")
+
+    try:
+        answer    = response.text or ""
+        citations = []
+        metadata  = getattr(response.candidates[0], "grounding_metadata", None)
+        if metadata:
+            for chunk in getattr(metadata, "grounding_chunks", []):
+                web = getattr(chunk, "web", None)
+                uri = getattr(web, "uri", "") if web else ""
+                if uri:
+                    citations.append(uri)
+
+        seen      = set()
+        citations = [u for u in citations if not (u in seen or seen.add(u))]
+
+        matched = next(
+            (url for url in citations
+             if any(domain.lower() in url.lower() for domain in target_domains)),
+            None,
+        )
+
+        return {
+            "cited":        matched is not None,
+            "matched_url":  matched,
+            "all_citations": citations,
+            "answer":       answer,
+            "error":        None,
+        }
+    except Exception as e:
+        return _citation_error(f"Google Gemini response parsing failed: {e}")
+
+
 def _citation_error(msg: str) -> dict:
     return {"cited": None, "matched_url": None, "all_citations": [], "answer": "", "error": msg}
 
@@ -291,6 +345,9 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         "chatgpt_cited":          None,
         "chatgpt_matched_url":    None,
         "chatgpt_citations":      [],
+        "google_cited":           None,
+        "google_matched_url":     None,
+        "google_citations":       [],
         "readiness_score":        None,
         "verdict":                "",
         "gaps":                   [],
@@ -302,6 +359,7 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
 
     perplexity = check_citation_perplexity(query, target_domains, keys)
     chatgpt    = check_citation_chatgpt(query, target_domains, keys)
+    google     = check_citation_google(query, target_domains, keys)
 
     result["perplexity_cited"]       = perplexity["cited"]
     result["perplexity_matched_url"] = perplexity["matched_url"]
@@ -309,6 +367,9 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
     result["chatgpt_cited"]          = chatgpt["cited"]
     result["chatgpt_matched_url"]    = chatgpt["matched_url"]
     result["chatgpt_citations"]      = chatgpt["all_citations"]
+    result["google_cited"]           = google["cited"]
+    result["google_matched_url"]     = google["matched_url"]
+    result["google_citations"]       = google["all_citations"]
 
     if perplexity["error"] and chatgpt["error"]:
         result["error"] = f"Perplexity: {perplexity['error']} | ChatGPT: {chatgpt['error']}"
@@ -318,9 +379,12 @@ def run_audit(query: str, page_url: str, target_domains: list[str], org_name: st
         result["verdict"] = "No page URL provided — citation check only."
         return result
 
-    cited_on_both = perplexity["cited"] and chatgpt["cited"]
-    if cited_on_both:
-        result["verdict"] = "Cited on both platforms. No audit needed."
+    platforms_checked = [perplexity["cited"], chatgpt["cited"]]
+    if keys.google and google["cited"] is not None:
+        platforms_checked.append(google["cited"])
+    cited_on_all = all(platforms_checked)
+    if cited_on_all:
+        result["verdict"] = "Cited on all checked platforms. No audit needed."
         return result
 
     # Collect competitor URLs from citations (non-target domains, max 2 unique)

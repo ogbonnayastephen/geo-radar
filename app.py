@@ -424,28 +424,40 @@ if st.session_state.audit_done and st.session_state.audit_results:
     st.divider()
     st.subheader("Step 4 — Results")
 
-    valid      = [r for r in results if r["perplexity_cited"] is not None
-                                     or r["chatgpt_cited"] is not None]
-    total      = len(valid)
-    perp_cited = sum(1 for r in valid if r["perplexity_cited"])
-    gpt_cited  = sum(1 for r in valid if r["chatgpt_cited"])
-    both       = sum(1 for r in valid if r["perplexity_cited"] and r["chatgpt_cited"])
+    valid       = [r for r in results if r["perplexity_cited"] is not None
+                                      or r["chatgpt_cited"] is not None]
+    total       = len(valid)
+    perp_cited  = sum(1 for r in valid if r["perplexity_cited"])
+    gpt_cited   = sum(1 for r in valid if r["chatgpt_cited"])
+    goog_cited  = sum(1 for r in valid if r.get("google_cited"))
+    has_google  = any(r.get("google_cited") is not None for r in valid)
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Queries checked",     total)
-    m2.metric("Cited on Perplexity", f"{perp_cited}/{total}")
-    m3.metric("Cited on ChatGPT",    f"{gpt_cited}/{total}")
-    m4.metric("Cited on both",       f"{both}/{total}")
+    if has_google:
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Queries checked",     total)
+        m2.metric("Cited on Perplexity", f"{perp_cited}/{total}")
+        m3.metric("Cited on ChatGPT",    f"{gpt_cited}/{total}")
+        m4.metric("Cited on Google AI",  f"{goog_cited}/{total}")
+        m5.metric("Cited on all",        f"{sum(1 for r in valid if r.get('perplexity_cited') and r.get('chatgpt_cited') and r.get('google_cited'))}/{total}")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Queries checked",     total)
+        m2.metric("Cited on Perplexity", f"{perp_cited}/{total}")
+        m3.metric("Cited on ChatGPT",    f"{gpt_cited}/{total}")
+        m4.metric("Cited on both",       f"{sum(1 for r in valid if r.get('perplexity_cited') and r.get('chatgpt_cited'))}/{total}")
 
     table_rows = []
     for r in results:
-        table_rows.append({
+        row = {
             "Query":      r["query"],
             "Perplexity": citation_badge(r["perplexity_cited"]),
             "ChatGPT":    citation_badge(r["chatgpt_cited"]),
             "Readiness":  r["readiness_score"] if r["readiness_score"] is not None else "—",
             "Verdict":    r["verdict"] if not r["error"] else f"⚠️ {r['error']}",
-        })
+        }
+        if has_google:
+            row["Google AI"] = citation_badge(r.get("google_cited"))
+        table_rows.append(row)
 
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
@@ -479,8 +491,8 @@ if st.session_state.audit_done and st.session_state.audit_results:
                 f"ChatGPT {citation_badge(r['chatgpt_cited'])}{score}"
             )
             with st.expander(label):
-                col_p, col_g = st.columns(2)
-                with col_p:
+                cols = st.columns(3) if has_google else st.columns(2)
+                with cols[0]:
                     st.markdown("**Perplexity**")
                     if r["perplexity_matched_url"]:
                         st.success(f"Cited: {r['perplexity_matched_url']}")
@@ -491,7 +503,7 @@ if st.session_state.audit_done and st.session_state.audit_results:
                     else:
                         st.warning("No citations returned.")
 
-                with col_g:
+                with cols[1]:
                     st.markdown("**ChatGPT**")
                     if r["chatgpt_matched_url"]:
                         st.success(f"Cited: {r['chatgpt_matched_url']}")
@@ -501,6 +513,20 @@ if st.session_state.audit_done and st.session_state.audit_results:
                             st.write(f"- {c}")
                     else:
                         st.warning("No citations returned.")
+
+                if has_google:
+                    with cols[2]:
+                        st.markdown("**Google AI**")
+                        if r.get("google_matched_url"):
+                            st.success(f"Cited: {r['google_matched_url']}")
+                        elif r.get("google_cited") is None:
+                            st.caption("No Google key provided.")
+                        elif r.get("google_citations"):
+                            st.error("Not citing you. Currently citing:")
+                            for c in r["google_citations"][:4]:
+                                st.write(f"- {c}")
+                        else:
+                            st.warning("No citations returned.")
 
                 st.divider()
 
