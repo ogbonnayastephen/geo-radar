@@ -92,15 +92,49 @@ Rules:
 # ---------------------------------------------------------------------------
 # SEED BUILDER
 # ---------------------------------------------------------------------------
-def build_seeds(services: str, audience: str, location: str) -> list[str]:
+def build_seeds(services: str, audience: str, location: str, keys: Keys) -> list[str]:
     """
-    Build a list of seed search terms from the org's context.
-    These seeds are what we run through Google autocomplete and Reddit.
-    No API call needed — just string manipulation.
+    Use Claude to generate 12 high-signal seed terms that reflect what a
+    real customer would type into Google — covering service, problem,
+    location-qualified, and comparison angles.
+
+    Falls back to string concatenation if the Claude call fails.
     """
-    loc      = location.strip()
-    short    = loc.replace("New York City", "NYC").replace("New York", "NYC")
-    seeds    = []
+    if keys and keys.anthropic:
+        try:
+            client = Anthropic(api_key=keys.anthropic)
+            prompt = f"""Generate exactly 12 short search seed terms (2-5 words each) for a business with these characteristics:
+
+Services: {services}
+Audience: {audience}
+Location: {location}
+
+Return ONLY a JSON array of 12 strings, no markdown, no preamble.
+Mix angles: service-focused, problem-focused, location-qualified, and comparison queries.
+Every term must be phrased as something a real customer would type into Google.
+Example format: ["web design NYC", "affordable website for restaurants", "best web designer near me"]"""
+
+            message = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = message.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1].replace("json", "", 1).strip()
+            seeds = json.loads(raw)
+            if isinstance(seeds, list) and seeds:
+                return [str(s) for s in seeds[:12]]
+        except Exception:
+            pass  # fall through to string fallback
+
+    return _build_seeds_fallback(services, audience, location)
+
+
+def _build_seeds_fallback(services: str, audience: str, location: str) -> list[str]:
+    loc   = location.strip()
+    short = loc.replace("New York City", "NYC").replace("New York", "NYC")
+    seeds = []
 
     for s in services.split(","):
         s = s.strip()
@@ -117,8 +151,7 @@ def build_seeds(services: str, audience: str, location: str) -> list[str]:
     seeds.append(f"best {services.split(',')[0].strip()} {short}")
     seeds.append(f"{services.split(',')[0].strip()} near me")
 
-    # Deduplicate while preserving order, cap at 12 seeds.
-    seen = set()
+    seen   = set()
     unique = [s for s in seeds if not (s.lower() in seen or seen.add(s.lower()))]
     return unique[:12]
 
@@ -260,7 +293,7 @@ def discover_queries(
         if progress_callback:
             progress_callback(msg)
 
-    seeds = build_seeds(services, audience, location)
+    seeds = build_seeds(services, audience, location, keys)
     if not seeds:
         return {"error": "Could not build seeds. Check your services and audience inputs."}
 
