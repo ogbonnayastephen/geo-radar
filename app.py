@@ -416,7 +416,7 @@ with st.form("discovery_form"):
             placeholder="small businesses, startups, local brands",
         )
     with col2:
-        location = st.text_input("City or region", value="")
+        location = st.text_input("City or region (leave blank if global)", value="")
 
     st.markdown("**Intent categories** — who is searching for you?")
     cat_col1, cat_col2, cat_col3 = st.columns(3)
