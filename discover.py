@@ -34,7 +34,7 @@ HEADERS_GOOGLE = {
         "Gecko/20100101 Firefox/120.0"
     )
 }
-HEADERS_REDDIT = {"User-Agent": "AEO-Radar-Discovery/1.0 (research tool)"}
+HEADERS_REDDIT = {"User-Agent": "GEO-Radar-Discovery/1.0 (research tool)"}
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +61,6 @@ def build_discovery_prompt(
     categories: list[str],
 ) -> str:
     categories_str = ", ".join(categories)
-    category_keys = {c: '["query 1", "query 2"]' for c in categories}
-    example_json = json.dumps(category_keys, indent=2).replace('"["query 1", "query 2"]"', '["query 1", "query 2"]')
     return f"""\
 Organization: {org_name}
 Services offered: {services}
@@ -139,20 +137,22 @@ def _build_seeds_fallback(services: str, audience: str, location: str) -> list[s
     for s in services.split(","):
         s = s.strip()
         if s:
-            seeds.append(f"{s} {short}")
-            seeds.append(f"{s} help {short}")
+            seeds.append(f"{s} {short}".strip())
+            seeds.append(f"{s} help {short}".strip())
 
     for a in audience.split(","):
         a = a.strip()
         if a:
-            seeds.append(f"help for {a} {short}")
-            seeds.append(f"{a} resources {short}")
+            seeds.append(f"help for {a} {short}".strip())
+            seeds.append(f"{a} resources {short}".strip())
 
-    seeds.append(f"best {services.split(',')[0].strip()} {short}")
-    seeds.append(f"{services.split(',')[0].strip()} near me")
+    first_service = services.split(",")[0].strip()
+    if first_service:
+        seeds.append(f"best {first_service} {short}".strip())
+        seeds.append(f"{first_service} near me")
 
     seen   = set()
-    unique = [s for s in seeds if not (s.lower() in seen or seen.add(s.lower()))]
+    unique = [s for s in seeds if s and not (s.lower() in seen or seen.add(s.lower()))]
     return unique[:12]
 
 
@@ -252,7 +252,11 @@ def cluster_with_claude(
     except Exception as e:
         return {"error": f"Claude clustering failed: {e}"}
 
-    raw = message.content[0].text.strip()
+    try:
+        raw = message.content[0].text.strip()
+    except (IndexError, AttributeError):
+        return {"error": "Claude returned an empty response during clustering."}
+
     if raw.startswith("```"):
         raw = raw.split("```")[1].replace("json", "", 1).strip()
 

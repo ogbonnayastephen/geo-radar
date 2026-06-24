@@ -601,7 +601,11 @@ if st.session_state.audit_done and st.session_state.audit_results:
 # ---------------------------------------------------------------------------
 st.divider()
 with st.expander("📈 Citation history for this organization"):
-    history = db.get_history(org_name)
+    try:
+        history = db.get_history(org_name)
+    except Exception:
+        st.warning("Could not load history from database.")
+        history = []
     if not history:
         st.info("No past runs found. Run an audit to start tracking citation rates over time.")
     else:

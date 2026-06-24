@@ -11,6 +11,7 @@ Uses only requests + BeautifulSoup — no extra dependencies needed.
 import time
 import json
 import requests
+from collections import deque
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from anthropic import Anthropic
@@ -22,7 +23,7 @@ from config import Keys
 REQUEST_TIMEOUT = 15
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (AEO-Radar site crawler; research tool)"
+    "User-Agent": "Mozilla/5.0 (GEO-Radar site crawler; research tool)"
 }
 
 
@@ -45,13 +46,13 @@ def crawl_site(homepage_url: str, max_pages: int = 60, progress_callback=None) -
 
     base_domain = urlparse(homepage_url).netloc.replace("www.", "")
     visited     = set()
-    to_visit    = [homepage_url]
+    to_visit    = deque([homepage_url])  # deque gives O(1) popleft vs O(n) for list.pop(0)
     pages       = []
 
     progress(f"Starting crawl of {base_domain}...")
 
     while to_visit and len(pages) < max_pages:
-        url = to_visit.pop(0)
+        url = to_visit.popleft()
 
         # Normalise and skip if already visited
         clean_url = url.split("#")[0].rstrip("/")
@@ -108,6 +109,7 @@ def crawl_site(homepage_url: str, max_pages: int = 60, progress_callback=None) -
                 and base_domain in parsed.netloc
                 and full_url not in visited
                 and full_url not in to_visit
+                and len(to_visit) < 500  # cap queue to avoid memory issues on very large sites
             ):
                 to_visit.append(full_url)
 
@@ -224,7 +226,14 @@ def map_site_and_match(
     if not homepage_url.startswith("http"):
         homepage_url = f"https://{homepage_url}"
 
-    pages = crawl_site(homepage_url, max_pages=max_pages, progress_callback=progress_callback)
+    try:
+        pages = crawl_site(homepage_url, max_pages=max_pages, progress_callback=progress_callback)
+    except Exception as e:
+        return {
+            "matches": {q: "" for q in queries},
+            "pages":   [],
+            "error":   f"Crawl failed unexpectedly: {e}",
+        }
 
     if not pages:
         return {

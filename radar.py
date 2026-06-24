@@ -64,9 +64,9 @@ def check_citation_perplexity(query: str, target_domains: list[str], keys: Keys)
     except ValueError:
         return _citation_error("Perplexity returned a non-JSON response.")
 
-    citations = data.get("citations", [])
-    if not citations and "search_results" in data:
-        citations = [r.get("url", "") for r in data["search_results"] if r.get("url")]
+    citations = data.get("citations") or []
+    if not citations:
+        citations = [r.get("url", "") for r in (data.get("search_results") or []) if r.get("url")]
 
     answer = ""
     try:
@@ -310,7 +310,7 @@ def scrape_page(url: str) -> dict:
         resp = requests.get(
             url,
             timeout=REQUEST_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0 (AEO-Radar audit bot)"},
+            headers={"User-Agent": "Mozilla/5.0 (GEO-Radar audit bot)"},
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -364,12 +364,16 @@ def audit_page(
     except Exception as e:
         return {"error": f"Claude request failed: {e}"}
 
-    raw = message.content[0].text.strip()
+    try:
+        raw = message.content[0].text.strip()
+    except (IndexError, AttributeError):
+        return {"error": "Claude returned an empty response."}
+
     if raw.startswith("```"):
         raw = raw.split("```")[1].replace("json", "", 1).strip()
 
     try:
-        parsed        = json.loads(raw)
+        parsed = json.loads(raw)
         parsed["error"] = None
         return parsed
     except json.JSONDecodeError:
