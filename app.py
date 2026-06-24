@@ -155,12 +155,243 @@ with st.sidebar:
         )
 
 # ---------------------------------------------------------------------------
-# Gate — block the tool until all keys are entered
+# Helpers — defined here so they are available in both the demo and results
+# ---------------------------------------------------------------------------
+def citation_badge(cited) -> str:
+    if cited is None:
+        return "⚠️ No key"
+    return "✅ Cited" if cited else "❌ Not cited"
+
+
+def google_badge(r: dict) -> str:
+    cited = r.get("google_cited")
+    if cited is True:
+        return "✅ Cited"
+    if cited is False:
+        return "❌ Not cited"
+    error = r.get("google_error", "")
+    if error and "No Google API key" not in error:
+        return "⚠️ Error"
+    return "⚑ No key"
+
+
+# ---------------------------------------------------------------------------
+# Gate — show demo landing page until keys are entered
 # ---------------------------------------------------------------------------
 if not keys_ready:
+
+    st.markdown(
+        "GEO Radar checks whether your business is being cited by AI answer engines — "
+        "Perplexity, ChatGPT, and Google AI — then gives you the exact content fixes to change that. "
+        "Enter your API keys in the sidebar to run a real audit on your own site."
+    )
+
+    st.markdown("#### How it works")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.markdown("**1 — Discover**  \nFind the real questions buyers, partners, and media ask about your category")
+    h2.markdown("**2 — Match**  \nCrawl your site and map each query to your most relevant page")
+    h3.markdown("**3 — Check**  \nSee whether Perplexity, ChatGPT, and Google AI are citing you for each query")
+    h4.markdown("**4 — Fix**  \nGet a rewritten content block, question-phrased headings, and FAQ schema for every gap")
+
+    st.divider()
+    st.markdown("#### Sample audit — Nexus Consulting (B2B strategy firm)")
     st.info(
-        "👈 Enter your three API keys in the sidebar to get started. "
-        "If you do not have them yet, expand **'Where do I get API keys?'** in the sidebar."
+        "This is sample output showing exactly what your audit will look like. "
+        "Enter your API keys in the sidebar to run it on your own site.",
+        icon="ℹ️",
+    )
+
+    _demo = [
+        {
+            "query": "go-to-market strategy for B2B SaaS",
+            "perplexity_cited": False, "chatgpt_cited": False, "google_cited": False,
+            "readiness_score": 12,
+            "verdict": "The page is a generic services list with no direct answer to this query.",
+            "perplexity_citations": ["https://notion.so/blog/gtm-strategy", "https://hubspot.com/go-to-market"],
+            "chatgpt_citations": ["https://a16z.com/go-to-market", "https://openviewpartners.com/gtm"],
+            "google_citations": ["https://hbr.org/gtm-saas", "https://mckinsey.com/saas-growth"],
+            "perplexity_matched_url": None, "chatgpt_matched_url": None, "google_matched_url": None,
+            "gaps": [
+                "No direct answer to 'what is a B2B SaaS GTM strategy' in the opening paragraph",
+                "No statistics, timelines, or named client outcomes — AI engines do not cite vague service descriptions",
+                "Missing FAQPage schema — competitor pages with schema consistently outperform on AI citations",
+            ],
+            "rewritten_section": (
+                "A B2B SaaS go-to-market strategy defines how you acquire your first 100 customers, "
+                "which channels drive repeatable revenue, and when to expand beyond your initial segment. "
+                "Nexus Consulting builds GTM strategies for Series A–C SaaS companies, typically reducing "
+                "time-to-first-enterprise-deal by 40% through ICP refinement and channel sequencing. "
+                "[ORG TO CONFIRM: average deal cycle, named client result]"
+            ),
+            "suggested_headings": [
+                "What does a B2B SaaS go-to-market strategy include?",
+                "How long does it take to build a GTM strategy for a SaaS company?",
+            ],
+            "faq_schema": (
+                '<script type="application/ld+json">\n'
+                '{\n  "@context": "https://schema.org",\n  "@type": "FAQPage",\n'
+                '  "mainEntity": [{\n    "@type": "Question",\n'
+                '    "name": "What does a B2B SaaS go-to-market strategy include?",\n'
+                '    "acceptedAnswer": {\n      "@type": "Answer",\n'
+                '      "text": "A B2B SaaS GTM strategy includes ICP definition, channel selection, '
+                'sales motion design, and a sequenced expansion plan."\n    }\n  }]\n}\n'
+                '</script>'
+            ),
+            "page_url": "https://nexusconsulting.com/services", "error": None,
+        },
+        {
+            "query": "GTM consulting for enterprise software companies",
+            "perplexity_cited": True, "chatgpt_cited": False, "google_cited": False,
+            "readiness_score": 54,
+            "verdict": "Perplexity cites the client roster page, but ChatGPT and Google AI find no direct answer to the enterprise GTM question.",
+            "perplexity_citations": [],
+            "chatgpt_citations": ["https://bain.com/gtm-consulting", "https://mckinsey.com/enterprise-software"],
+            "google_citations": ["https://gartner.com/gtm-enterprise"],
+            "perplexity_matched_url": "https://nexusconsulting.com/clients",
+            "chatgpt_matched_url": None, "google_matched_url": None,
+            "gaps": [
+                "Enterprise-specific content is buried — the page targets all company sizes with the same copy",
+                "No answer to 'how do you run GTM for enterprise software' visible in the first screen",
+                "Missing case study with a named enterprise client, deal size, or sales cycle data",
+            ],
+            "rewritten_section": (
+                "Nexus Consulting specializes in GTM strategy for enterprise software companies "
+                "selling to Fortune 1000 buyers, typically with deal sizes above $50,000 ARR. "
+                "[ORG TO CONFIRM: exact deal size range, named enterprise client]"
+            ),
+            "suggested_headings": [
+                "How does GTM strategy differ for enterprise vs. SMB software companies?",
+                "What results do enterprise software companies see from GTM consulting?",
+            ],
+            "faq_schema": "",
+            "page_url": "https://nexusconsulting.com/enterprise", "error": None,
+        },
+        {
+            "query": "how to build a sales motion for SaaS",
+            "perplexity_cited": False, "chatgpt_cited": True, "google_cited": True,
+            "readiness_score": 71,
+            "verdict": "ChatGPT and Google AI cite the blog post for its step-by-step breakdown, but Perplexity favors pages with embedded benchmark statistics.",
+            "perplexity_citations": ["https://salesforce.com/blog/saas-sales-motion"],
+            "chatgpt_citations": [],
+            "google_citations": [],
+            "perplexity_matched_url": None,
+            "chatgpt_matched_url": "https://nexusconsulting.com/blog/saas-sales-motion",
+            "google_matched_url": "https://nexusconsulting.com/blog/saas-sales-motion",
+            "gaps": [
+                "No benchmark statistics — Perplexity citations consistently include conversion rates or timeline data",
+                "The numbered steps are strong but lack outcome data per step",
+            ],
+            "rewritten_section": (
+                "Building a SaaS sales motion starts with defining your ICP, then sequencing outbound, "
+                "inbound, and partner channels by deal size. Companies that nail their sales motion in "
+                "the first 18 months typically see 2–3x faster ramp times for new reps. "
+                "[ORG TO CONFIRM: client benchmark data]"
+            ),
+            "suggested_headings": [
+                "What are the five stages of a SaaS sales motion?",
+                "How do you know when your SaaS sales motion is working?",
+            ],
+            "faq_schema": "",
+            "page_url": "https://nexusconsulting.com/blog/saas-sales-motion", "error": None,
+        },
+    ]
+    _demo_synthesis = {
+        "root_causes": [
+            "Pages are written for human browsing, not machine extraction — answers are buried rather than leading",
+            "No statistics, named outcomes, or specific timelines anywhere on the site — AI engines consistently prefer pages with concrete evidence",
+            "FAQPage schema is absent across all audited pages, giving competitor pages a structural citation advantage",
+        ],
+        "priority_fixes": [
+            "Add a direct-answer opening paragraph to every service page — the first sentence must answer the query, not describe the company",
+            "Add at least two concrete data points per page (deal size, timeline, client category, or percentage outcome)",
+            "Implement FAQPage schema on the top five pages — this alone will measurably improve Google AI citation rate",
+        ],
+    }
+
+    # Metrics
+    _total = len(_demo)
+    _perp  = sum(1 for r in _demo if r["perplexity_cited"])
+    _gpt   = sum(1 for r in _demo if r["chatgpt_cited"])
+    _goog  = sum(1 for r in _demo if r.get("google_cited"))
+    _all3  = sum(1 for r in _demo if r.get("perplexity_cited") and r.get("chatgpt_cited") and r.get("google_cited"))
+    dm1, dm2, dm3, dm4, dm5 = st.columns(5)
+    dm1.metric("Queries checked",     _total)
+    dm2.metric("Cited on Perplexity", f"{_perp}/{_total}")
+    dm3.metric("Cited on ChatGPT",    f"{_gpt}/{_total}")
+    dm4.metric("Cited on Google AI",  f"{_goog}/{_total}")
+    dm5.metric("Cited on all 3",      f"{_all3}/{_total}")
+
+    # Results table
+    _rows = []
+    for r in _demo:
+        _rows.append({
+            "Query":      r["query"],
+            "Perplexity": citation_badge(r["perplexity_cited"]),
+            "ChatGPT":    citation_badge(r["chatgpt_cited"]),
+            "Google AI":  citation_badge(r.get("google_cited")),
+            "Readiness":  r["readiness_score"],
+            "Verdict":    r["verdict"],
+        })
+    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+
+    # Strategic diagnosis
+    st.divider()
+    st.markdown("### Strategic diagnosis")
+    st.caption("Root causes across all queries — not per-page symptoms.")
+    _rc, _pf = st.columns(2)
+    with _rc:
+        st.markdown("**Root causes**")
+        for cause in _demo_synthesis["root_causes"]:
+            st.markdown(f"- {cause}")
+    with _pf:
+        st.markdown("**Priority fixes (highest impact first)**")
+        for i, fix in enumerate(_demo_synthesis["priority_fixes"], 1):
+            st.markdown(f"{i}. {fix}")
+
+    # One fully expanded Fix
+    st.markdown("### Fixes")
+    _r = _demo[0]
+    with st.expander(
+        f"{_r['query']}   |   "
+        f"Perplexity {citation_badge(_r['perplexity_cited'])}   "
+        f"ChatGPT {citation_badge(_r['chatgpt_cited'])}   "
+        f"Google AI {citation_badge(_r.get('google_cited'))}   ·   readiness {_r['readiness_score']}/100",
+        expanded=True,
+    ):
+        _cp, _cg, _cgg = st.columns(3)
+        with _cp:
+            st.markdown("**Perplexity**")
+            st.error("Not citing you. Currently citing:")
+            for c in _r["perplexity_citations"]:
+                st.write(f"- {c}")
+        with _cg:
+            st.markdown("**ChatGPT**")
+            st.error("Not citing you. Currently citing:")
+            for c in _r["chatgpt_citations"]:
+                st.write(f"- {c}")
+        with _cgg:
+            st.markdown("**Google AI**")
+            st.error("Not citing you. Currently citing:")
+            for c in _r["google_citations"]:
+                st.write(f"- {c}")
+        st.divider()
+        st.markdown("**What is missing on the page**")
+        for g in _r["gaps"]:
+            st.write(f"- {g}")
+        st.markdown("**Answer-first rewrite**")
+        st.info(_r["rewritten_section"])
+        st.markdown("**Suggested question-phrased headings**")
+        for h in _r["suggested_headings"]:
+            st.write(f"- {h}")
+        st.markdown("**FAQ schema — paste into the page's `<head>`**")
+        st.code(_r["faq_schema"], language="html")
+
+    st.divider()
+    st.markdown("### Ready to audit your own site?")
+    st.markdown(
+        "Enter your **Perplexity**, **OpenAI**, and **Anthropic** API keys in the sidebar. "
+        "Each key requires a small credit balance — $5 per service lasts several months at this tool's usage level. "
+        "Expand **'Where do I get API keys?'** in the sidebar for step-by-step instructions."
     )
     st.stop()
 
@@ -378,24 +609,6 @@ def parse_queries(raw: str):
         else:
             items.append((line, ""))
     return items
-
-
-def citation_badge(cited) -> str:
-    if cited is None:
-        return "⚠️ No key"
-    return "✅ Cited" if cited else "❌ Not cited"
-
-
-def google_badge(r: dict) -> str:
-    cited = r.get("google_cited")
-    if cited is True:
-        return "✅ Cited"
-    if cited is False:
-        return "❌ Not cited"
-    error = r.get("google_error", "")
-    if error and "No Google API key" not in error:
-        return "⚠️ Error"
-    return "⚑ No key"
 
 
 # ---------------------------------------------------------------------------
