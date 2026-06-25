@@ -16,6 +16,7 @@ Four-step workflow:
 
 import io
 import csv
+import os
 import time
 import pandas as pd
 import streamlit as st
@@ -86,24 +87,28 @@ with st.sidebar:
         type="password",
         placeholder="Paste your Perplexity key here",
         help="Get yours at perplexity.ai/settings/api",
+        value=os.getenv("PERPLEXITY_API_KEY", ""),
     )
     openai_key = st.text_input(
         "OpenAI (ChatGPT) API key",
         type="password",
         placeholder="Paste your OpenAI key here",
         help="Get yours at platform.openai.com/api-keys",
+        value=os.getenv("OPENAI_API_KEY", ""),
     )
     anthropic_key = st.text_input(
         "Anthropic (Claude) API key",
         type="password",
         placeholder="Paste your Anthropic key here",
         help="Get yours at console.anthropic.com",
+        value=os.getenv("ANTHROPIC_API_KEY", ""),
     )
     google_key = st.text_input(
-        "Google AI API key (optional)",
+        "Google AI API key",
         type="password",
-        placeholder="Enables Google AI Overview check",
-        help="Get yours at aistudio.google.com — adds a third citation platform.",
+        placeholder="Paste your Google AI Studio key here",
+        help="Get yours at aistudio.google.com — required for Google AI citation check.",
+        value=os.getenv("GOOGLE_API_KEY", ""),
     )
 
     keys = Keys(
@@ -113,7 +118,7 @@ with st.sidebar:
         google=google_key,
     )
 
-    keys_ready = all([perplexity_key, openai_key, anthropic_key])
+    keys_ready = all([perplexity_key, openai_key, anthropic_key, google_key])
 
     if keys_ready:
         st.success("✅ All keys entered. Ready to run.")
@@ -122,6 +127,7 @@ with st.sidebar:
         if not perplexity_key: missing.append("Perplexity")
         if not openai_key:     missing.append("OpenAI")
         if not anthropic_key:  missing.append("Anthropic")
+        if not google_key:     missing.append("Google AI")
         st.warning(f"Missing: {', '.join(missing)}")
 
     st.divider()
@@ -389,7 +395,7 @@ if not keys_ready:
     st.divider()
     st.markdown("### Ready to audit your own site?")
     st.markdown(
-        "Enter your **Perplexity**, **OpenAI**, and **Anthropic** API keys in the sidebar. "
+        "Enter your **Perplexity**, **OpenAI**, **Anthropic**, and **Google AI** API keys in the sidebar. "
         "Each key requires a small credit balance — $5 per service lasts several months at this tool's usage level. "
         "Expand **'Where do I get API keys?'** in the sidebar for step-by-step instructions."
     )

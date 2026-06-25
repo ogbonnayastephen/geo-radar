@@ -154,11 +154,6 @@ The application opens in your browser at `http://localhost:8501`. Enter API keys
 | Anthropic | Query clustering, page-to-query matching, audit, synthesis | console.anthropic.com |
 | OpenAI | ChatGPT citation check (`gpt-4o-search-preview`) | platform.openai.com/api-keys |
 | Perplexity | Perplexity citation check (Sonar API) | perplexity.ai/settings/api |
-
-### Optional API Key
-
-| Service | Purpose | Where to obtain |
-|---------|---------|----------------|
 | Google AI Studio | Google AI citation check (Gemini + Search Grounding) | aistudio.google.com |
 
 Keys are entered in the sidebar at session start. They are never written to disk, never logged, and exist only in memory for the duration of the browser session. Each user's keys are isolated in a `Keys` dataclass instance scoped to their session — they are never stored in process-level environment variables.
