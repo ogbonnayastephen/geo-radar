@@ -66,6 +66,7 @@ _DEFAULTS = {
     "stale_checked":   False,
     "stale_orgs":      [],
     "signup_pending":  False,
+    "using_tracked":   False,  # True when audit_table was pre-loaded from tracked_queries
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -132,14 +133,31 @@ with st.sidebar:
             past_orgs = []
 
         if past_orgs:
-            org_options    = ["➕ New client"] + past_orgs
+            org_options     = ["➕ New client"] + past_orgs
             selected_client = st.selectbox("Switch client", org_options,
                                             label_visibility="collapsed",
                                             key="client_switcher")
             if selected_client != "➕ New client":
                 if st.session_state.get("_last_client") != selected_client:
-                    st.session_state["_last_client"] = selected_client
-                    st.session_state["org_name"]     = selected_client
+                    st.session_state["_last_client"]         = selected_client
+                    st.session_state["_pending_org_name"]    = selected_client
+                    st.session_state["_pending_domains_str"] = ""
+                    try:
+                        tracked = db.get_tracked_queries(user["id"], selected_client)
+                        if tracked:
+                            st.session_state.audit_table = [
+                                {"include": True, "query": t["query"], "page_url": t.get("page_url", "")}
+                                for t in tracked
+                            ]
+                            st.session_state.using_tracked  = True
+                            st.session_state.auto_extracted = {
+                                "org_name": selected_client, "services": "",
+                                "audience": "", "domains": [],
+                            }
+                            st.session_state.audit_done      = False
+                            st.session_state.recheck_results = {}
+                    except Exception:
+                        pass
                     st.rerun()
 
         # ── Org name & domains (auto-filled after URL analysis) ───────────
@@ -446,10 +464,27 @@ if analyze_btn and homepage_url:
     with st.spinner(f"Matching {len(all_queries)} queries to {len(pages)} pages..."):
         matches = crawler.match_queries_to_pages(all_queries, pages, org_name, _KEYS)
 
-    st.session_state.audit_table = [
+    # Merge tracked queries (always included first) with new discoveries
+    try:
+        tracked = db.get_tracked_queries(user["id"], org_name)
+    except Exception:
+        tracked = []
+
+    tracked_queries_set = {t["query"].lower() for t in tracked}
+    merged = [
+        {"include": True,  "query": t["query"], "page_url": t.get("page_url") or matches.get(t["query"], "")}
+        for t in tracked
+    ] + [
+        {"include": False, "query": q,           "page_url": matches.get(q, "")}
+        for q in all_queries
+        if q.lower() not in tracked_queries_set
+    ]
+
+    st.session_state.audit_table   = merged if merged else [
         {"include": True, "query": q, "page_url": matches.get(q, "")}
         for q in all_queries
     ]
+    st.session_state.using_tracked = bool(tracked)
     st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -460,10 +495,19 @@ if st.session_state.audit_table and not st.session_state.audit_done:
 
     st.divider()
     st.subheader("Review queries and matched pages")
-    st.caption(
-        "Edit any URL, uncheck rows to skip, or add rows manually. "
-        "Then click **Run audit**."
-    )
+    if st.session_state.get("using_tracked"):
+        n_tracked = len(st.session_state.audit_table)
+        st.info(
+            f"**{n_tracked} saved {'query' if n_tracked == 1 else 'queries'} loaded** "
+            "from your last audit — same queries, consistent tracking. "
+            "Edit URLs or add rows, then run.",
+            icon="🔁",
+        )
+    else:
+        st.caption(
+            "Edit any URL, uncheck rows to skip, or add rows manually. "
+            "Then click **Run audit**."
+        )
 
     df        = pd.DataFrame(st.session_state.audit_table)
     edited_df = st.data_editor(
@@ -541,6 +585,12 @@ if st.session_state.audit_table and not st.session_state.audit_done:
         except Exception:
             pass
 
+        try:
+            db.upsert_tracked_queries(user.get("id"), org_name, rows)
+        except Exception:
+            pass
+
+        st.session_state.using_tracked = False
         st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -705,6 +755,29 @@ if st.session_state.audit_done and st.session_state.audit_results:
                         "visible on the page. Fill in [ORG TO CONFIRM] placeholders first."
                     )
                     st.code(r["faq_schema"], language="html")
+
+                st.divider()
+                st.markdown("**Citation history for this query**")
+                try:
+                    q_history = db.get_query_citation_history(
+                        user.get("id"), org_name, r["query"], limit=12
+                    )
+                    if q_history:
+                        hist_rows = []
+                        for h in q_history:
+                            hist_rows.append({
+                                "Date":       h["created_at"][:10],
+                                "Perplexity": "✅" if h.get("perplexity_cited") else ("❌" if h.get("perplexity_cited") is False else "—"),
+                                "ChatGPT":    "✅" if h.get("chatgpt_cited")    else ("❌" if h.get("chatgpt_cited")    is False else "—"),
+                                "Google AI":  "✅" if h.get("google_cited")     else ("❌" if h.get("google_cited")     is False else "—"),
+                                "Readiness":  h.get("readiness_score") if h.get("readiness_score") is not None else "—",
+                            })
+                        st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+                        st.caption(f"Last {len(hist_rows)} audit runs — oldest first.")
+                    else:
+                        st.caption("History will appear here after your next audit.")
+                except Exception:
+                    st.caption("History unavailable.")
 
                 st.divider()
                 st.markdown("**Applied the fix? Re-check this page.**")

@@ -80,6 +80,18 @@ def init() -> None:
                 checked_at        TEXT    NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_queries (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT    NOT NULL,
+                org_name   TEXT    NOT NULL,
+                query      TEXT    NOT NULL,
+                page_url   TEXT,
+                active     INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT    NOT NULL,
+                UNIQUE(user_id, org_name, query)
+            )
+        """)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +364,119 @@ def get_stale_orgs(user_id: str, days: int = 14) -> list[dict]:
                     days_ago = days
                 result.append({"org_name": org_name, "last_run": last_run, "days_ago": days_ago})
             return result
+
+
+# ---------------------------------------------------------------------------
+# TRACKED QUERIES — persistent query+page sets per org
+# ---------------------------------------------------------------------------
+def upsert_tracked_queries(user_id: str, org_name: str, rows: list[dict]) -> None:
+    """
+    Save or update the tracked query+page_url set for an org.
+    Uses UPSERT so re-running the same audit doesn't duplicate rows.
+    rows: list of {query, page_url}
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    if _USE_SUPABASE:
+        sb = _sb()
+        for row in rows:
+            sb.table("tracked_queries").upsert(
+                {
+                    "user_id":  user_id,
+                    "org_name": org_name,
+                    "query":    row["query"],
+                    "page_url": row.get("page_url", ""),
+                    "active":   True,
+                },
+                on_conflict="user_id,org_name,query",
+            ).execute()
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            for row in rows:
+                conn.execute(
+                    """INSERT INTO tracked_queries
+                           (user_id, org_name, query, page_url, active, created_at)
+                       VALUES (?, ?, ?, ?, 1, ?)
+                       ON CONFLICT(user_id, org_name, query) DO UPDATE SET
+                           page_url = excluded.page_url,
+                           active   = 1""",
+                    (user_id, org_name, row["query"], row.get("page_url", ""), now),
+                )
+
+
+def get_tracked_queries(user_id: str, org_name: str) -> list[dict]:
+    """Return active tracked queries for an org, oldest-first (stable order)."""
+    if _USE_SUPABASE:
+        res = (
+            _sb().table("tracked_queries")
+            .select("query, page_url, created_at")
+            .eq("user_id",  user_id)
+            .eq("org_name", org_name)
+            .eq("active",   True)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return res.data or []
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT query, page_url, created_at FROM tracked_queries
+                   WHERE user_id = ? AND org_name = ? AND active = 1
+                   ORDER BY created_at ASC""",
+                (user_id, org_name),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+
+def get_query_citation_history(
+    user_id: str,
+    org_name: str,
+    query: str,
+    limit: int = 12,
+) -> list[dict]:
+    """
+    Return per-engine citation results for a specific query across all runs,
+    oldest-first — so callers can render a chronological trend table.
+    Each row: {perplexity_cited, chatgpt_cited, google_cited, readiness_score, created_at}
+    """
+    if _USE_SUPABASE:
+        # Collect run IDs belonging to this user+org
+        runs_res = (
+            _sb().table("runs")
+            .select("id")
+            .eq("user_id",  user_id)
+            .eq("org_name", org_name)
+            .execute()
+        )
+        run_ids = [r["id"] for r in (runs_res.data or [])]
+        if not run_ids:
+            return []
+        res = (
+            _sb().table("query_results")
+            .select("perplexity_cited, chatgpt_cited, google_cited, readiness_score, created_at")
+            .eq("query", query)
+            .in_("run_id", run_ids)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT qr.perplexity_cited, qr.chatgpt_cited, qr.google_cited,
+                          qr.readiness_score, r.created_at
+                   FROM query_results qr
+                   JOIN runs r ON qr.run_id = r.id
+                   WHERE qr.query = ?
+                     AND r.org_name = ?
+                     AND (r.user_id = ? OR r.user_id IS NULL)
+                   ORDER BY r.created_at ASC
+                   LIMIT ?""",
+                (query, org_name, user_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
 
 def get_user_orgs(user_id: str) -> list[str]:
