@@ -41,6 +41,17 @@ db.init()
 st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 
 # ---------------------------------------------------------------------------
+# Transfer any pending auto-fill values BEFORE widgets render.
+# (Streamlit forbids writing to a session_state key that's already bound to a
+# widget in the same script run — so we stage values in _pending_* keys and
+# flush them here at the very top of each run, before the sidebar renders.)
+# ---------------------------------------------------------------------------
+if "_pending_org_name" in st.session_state:
+    st.session_state["org_name"] = st.session_state.pop("_pending_org_name")
+if "_pending_domains_str" in st.session_state:
+    st.session_state["domains_str"] = st.session_state.pop("_pending_domains_str")
+
+# ---------------------------------------------------------------------------
 # Session state defaults
 # ---------------------------------------------------------------------------
 _DEFAULTS = {
@@ -393,9 +404,9 @@ if analyze_btn and homepage_url:
     with st.spinner("Reading your homepage..."):
         extracted = crawler.auto_extract_business_info(url, _KEYS)
 
-    st.session_state.auto_extracted    = extracted
-    st.session_state["org_name"]       = extracted.get("org_name", "")
-    st.session_state["domains_str"]    = ", ".join(extracted.get("domains", []))
+    st.session_state.auto_extracted         = extracted
+    st.session_state["_pending_org_name"]   = extracted.get("org_name", "")
+    st.session_state["_pending_domains_str"] = ", ".join(extracted.get("domains", []))
 
     org_name = extracted.get("org_name", "")
     services = extracted.get("services", "")
