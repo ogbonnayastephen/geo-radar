@@ -90,7 +90,7 @@ Rules:
 # ---------------------------------------------------------------------------
 # SEED BUILDER
 # ---------------------------------------------------------------------------
-def build_seeds(services: str, audience: str, location: str, keys: Keys) -> list[str]:
+def build_seeds(services: str, audience: str, location: str, keys: Keys, org_name: str = "") -> list[str]:
     """
     Use Claude to generate 12 high-signal seed terms that reflect what a
     real customer would type into Google — covering service, problem,
@@ -101,11 +101,20 @@ def build_seeds(services: str, audience: str, location: str, keys: Keys) -> list
     if keys and keys.anthropic:
         try:
             client = Anthropic(api_key=keys.anthropic)
+            context_parts = []
+            if org_name:
+                context_parts.append(f"Business name: {org_name}")
+            if services:
+                context_parts.append(f"Services: {services}")
+            if audience:
+                context_parts.append(f"Audience: {audience}")
+            if location:
+                context_parts.append(f"Location: {location}")
+            context = "\n".join(context_parts) if context_parts else f"Business: {org_name or 'unknown'}"
+
             prompt = f"""Generate exactly 12 short search seed terms (2-5 words each) for a business with these characteristics:
 
-Services: {services}
-Audience: {audience}
-Location: {location}
+{context}
 
 Return ONLY a JSON array of 12 strings, no markdown, no preamble.
 Mix angles: service-focused, problem-focused, location-qualified, and comparison queries.
@@ -273,9 +282,9 @@ def cluster_with_claude(
 # ---------------------------------------------------------------------------
 def discover_queries(
     org_name: str,
-    services: str,
-    audience: str,
-    location: str,
+    services: str = "",
+    audience: str = "",
+    location: str = "",
     categories: list[str] = None,
     progress_callback=None,
     keys: Keys = None,
@@ -297,7 +306,7 @@ def discover_queries(
         if progress_callback:
             progress_callback(msg)
 
-    seeds = build_seeds(services, audience, location, keys)
+    seeds = build_seeds(services, audience, location, keys, org_name=org_name)
     if not seeds:
         return {"error": "Could not build seeds. Check your services and audience inputs."}
 

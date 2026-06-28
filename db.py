@@ -16,7 +16,7 @@ New additions:
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
 _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -298,6 +298,62 @@ def get_run_queries(run_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 # AGENCY — client switcher
 # ---------------------------------------------------------------------------
+def get_stale_orgs(user_id: str, days: int = 14) -> list[dict]:
+    """
+    Return orgs for this user whose most recent run is older than `days` days.
+    Each entry: {org_name, last_run (ISO string), days_ago (int)}.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    if _USE_SUPABASE:
+        res = (
+            _sb().table("runs")
+            .select("org_name, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        latest: dict[str, str] = {}
+        for row in (res.data or []):
+            name = row["org_name"]
+            if name not in latest:
+                latest[name] = row["created_at"]
+
+        stale = []
+        for org_name, last_run in latest.items():
+            if last_run < cutoff:
+                try:
+                    last_dt  = datetime.fromisoformat(last_run.replace("Z", "+00:00"))
+                    days_ago = (datetime.now(timezone.utc) - last_dt).days
+                except Exception:
+                    days_ago = days
+                stale.append({"org_name": org_name, "last_run": last_run, "days_ago": days_ago})
+        return stale
+
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                """SELECT org_name, MAX(created_at) as last_run
+                   FROM runs
+                   WHERE (user_id = ? OR user_id IS NULL)
+                   GROUP BY org_name
+                   HAVING MAX(created_at) < ?
+                   ORDER BY last_run DESC""",
+                (user_id, cutoff),
+            ).fetchall()
+            result = []
+            for org_name, last_run in rows:
+                try:
+                    last_dt  = datetime.fromisoformat(last_run)
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    days_ago = (datetime.now(timezone.utc) - last_dt).days
+                except Exception:
+                    days_ago = days
+                result.append({"org_name": org_name, "last_run": last_run, "days_ago": days_ago})
+            return result
+
+
 def get_user_orgs(user_id: str) -> list[str]:
     """Return distinct org names for a user, most recently used first."""
     if _USE_SUPABASE:
