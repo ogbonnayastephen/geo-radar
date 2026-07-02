@@ -6,3 +6,10 @@ __pycache__/
 .streamlit/secrets.toml
 aeo_radar_results.csv
 .DS_Store
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sql

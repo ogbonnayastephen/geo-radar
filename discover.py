@@ -15,6 +15,7 @@ search are both publicly accessible.
 
 import json
 import time
+from collections import Counter
 import requests
 from anthropic import Anthropic
 
@@ -61,6 +62,12 @@ def build_discovery_prompt(
     categories: list[str],
 ) -> str:
     categories_str = ", ".join(categories)
+    stage_defs = """
+Buying stage definitions (use these to decide which bucket each query belongs in):
+- awareness: broad "what is / how does" queries; buyer has a problem but no vendor intent yet
+- consideration: comparing options, "best X for Y", shortlisting; buyer is evaluating solutions
+- evaluation: brand-specific queries, social proof, reviews, comparisons naming specific vendors
+- decision: pricing, "how to get started", "get a demo", "sign up"; strong conversion intent"""
     return f"""\
 Organization: {org_name}
 Services offered: {services}
@@ -68,6 +75,7 @@ Customers or audiences served: {audience}
 Location: {location}
 
 Intent categories to group queries into: {categories_str}
+{stage_defs}
 
 Raw queries scraped from Google autocomplete and Reddit (unfiltered):
 {json.dumps(raw_queries, indent=2)}
@@ -90,7 +98,7 @@ Rules:
 # ---------------------------------------------------------------------------
 # SEED BUILDER
 # ---------------------------------------------------------------------------
-def build_seeds(services: str, audience: str, location: str, keys: Keys) -> list[str]:
+def build_seeds(services: str, audience: str, location: str, keys: Keys, org_name: str = "") -> list[str]:
     """
     Use Claude to generate 12 high-signal seed terms that reflect what a
     real customer would type into Google — covering service, problem,
@@ -101,11 +109,20 @@ def build_seeds(services: str, audience: str, location: str, keys: Keys) -> list
     if keys and keys.anthropic:
         try:
             client = Anthropic(api_key=keys.anthropic)
+            context_parts = []
+            if org_name:
+                context_parts.append(f"Business name: {org_name}")
+            if services:
+                context_parts.append(f"Services: {services}")
+            if audience:
+                context_parts.append(f"Audience: {audience}")
+            if location:
+                context_parts.append(f"Location: {location}")
+            context = "\n".join(context_parts) if context_parts else f"Business: {org_name or 'unknown'}"
+
             prompt = f"""Generate exactly 12 short search seed terms (2-5 words each) for a business with these characteristics:
 
-Services: {services}
-Audience: {audience}
-Location: {location}
+{context}
 
 Return ONLY a JSON array of 12 strings, no markdown, no preamble.
 Mix angles: service-focused, problem-focused, location-qualified, and comparison queries.
@@ -273,9 +290,9 @@ def cluster_with_claude(
 # ---------------------------------------------------------------------------
 def discover_queries(
     org_name: str,
-    services: str,
-    audience: str,
-    location: str,
+    services: str = "",
+    audience: str = "",
+    location: str = "",
     categories: list[str] = None,
     progress_callback=None,
     keys: Keys = None,
@@ -292,12 +309,12 @@ def discover_queries(
     Returns: {<category keys>, error, raw_count, seeds_used}
     """
     if categories is None:
-        categories = ["customers", "partners", "media"]
+        categories = ["awareness", "consideration", "evaluation", "decision"]
     def progress(msg):
         if progress_callback:
             progress_callback(msg)
 
-    seeds = build_seeds(services, audience, location, keys)
+    seeds = build_seeds(services, audience, location, keys, org_name=org_name)
     if not seeds:
         return {"error": "Could not build seeds. Check your services and audience inputs."}
 
@@ -319,14 +336,16 @@ def discover_queries(
         raw_queries.extend(titles)
         time.sleep(0.5)
 
-    # Deduplicate the full raw pile
-    seen = set()
-    unique = []
+    # Deduplicate while tracking how many times each query appeared across seeds
+    _counts = Counter(q.strip().lower() for q in raw_queries if q.strip())
+    seen    = set()
+    unique  = []
     for q in raw_queries:
         q = q.strip()
         if q and q.lower() not in seen:
             seen.add(q.lower())
             unique.append(q)
+    unique_counts = {q: _counts[q.lower()] for q in unique}
 
     raw_count = len(unique)
     progress(f"Collected {raw_count} real queries. Asking Claude to organize them...")
@@ -338,4 +357,5 @@ def discover_queries(
     clustered = cluster_with_claude(unique, org_name, services, audience, location, categories, keys)
     clustered["raw_count"]  = raw_count
     clustered["seeds_used"] = seeds
+    clustered["_freq"]      = unique_counts
     return clustered

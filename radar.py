@@ -39,12 +39,25 @@ PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
 # ---------------------------------------------------------------------------
 # 1a. PERPLEXITY CITATION CHECK
 # ---------------------------------------------------------------------------
-def check_citation_perplexity(query: str, target_domains: list[str], keys: Keys) -> dict:
+def check_citation_perplexity(
+    query: str, target_domains: list[str], keys: Keys, n_samples: int = 1
+) -> dict:
     """
     Ask Perplexity the query and check whether any target domain appears
     in the answer's citations.
-    Returns: {cited, matched_url, all_citations, answer, error}
+    n_samples > 1 runs the check multiple times and returns a confidence band.
+    Returns: {cited, matched_url, all_citations, answer, error, cited_count, sample_count}
     """
+    if n_samples > 1:
+        samples = [_perplexity_once(query, target_domains, keys) for _ in range(n_samples)]
+        return _aggregate_samples(samples)
+    result = _perplexity_once(query, target_domains, keys)
+    result["cited_count"]  = 1 if result.get("cited") else 0
+    result["sample_count"] = 1
+    return result
+
+
+def _perplexity_once(query: str, target_domains: list[str], keys: Keys) -> dict:
     if not keys.perplexity:
         return _citation_error("Perplexity API key is not set.")
 
@@ -92,12 +105,25 @@ def check_citation_perplexity(query: str, target_domains: list[str], keys: Keys)
 # ---------------------------------------------------------------------------
 # 1b. CHATGPT CITATION CHECK
 # ---------------------------------------------------------------------------
-def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) -> dict:
+def check_citation_chatgpt(
+    query: str, target_domains: list[str], keys: Keys, n_samples: int = 1
+) -> dict:
     """
     Ask ChatGPT (gpt-4o-search-preview) the query and check whether any
     target domain appears in the answer's url_citation annotations.
-    Returns: {cited, matched_url, all_citations, answer, error}
+    n_samples > 1 returns a confidence band.
+    Returns: {cited, matched_url, all_citations, answer, error, cited_count, sample_count}
     """
+    if n_samples > 1:
+        samples = [_chatgpt_once(query, target_domains, keys) for _ in range(n_samples)]
+        return _aggregate_samples(samples)
+    result = _chatgpt_once(query, target_domains, keys)
+    result["cited_count"]  = 1 if result.get("cited") else 0
+    result["sample_count"] = 1
+    return result
+
+
+def _chatgpt_once(query: str, target_domains: list[str], keys: Keys) -> dict:
     if not keys.openai:
         return _citation_error("OpenAI API key is not set.")
 
@@ -125,7 +151,6 @@ def check_citation_chatgpt(query: str, target_domains: list[str], keys: Keys) ->
                 if url:
                     citations.append(url)
 
-        # Deduplicate, preserve order
         seen      = set()
         citations = [u for u in citations if not (u in seen or seen.add(u))]
 
@@ -181,14 +206,26 @@ def _resolve_gemini_model(client) -> str:
     return _gemini_model_cache
 
 
-def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> dict:
+def check_citation_google(
+    query: str, target_domains: list[str], keys: Keys, n_samples: int = 1
+) -> dict:
     """
     Ask Gemini (with Google Search grounding) the query and check whether any
     target domain appears in the grounding citations.
-    Model is resolved dynamically from the API so deprecated models never
-    cause failures — the latest available Flash model is always used.
-    Returns: {cited, matched_url, all_citations, answer, error}
+    n_samples > 1 returns a confidence band.
+    Returns: {cited, matched_url, all_citations, answer, error, cited_count, sample_count}
     """
+    if n_samples > 1:
+        samples = [_google_once(query, target_domains, keys) for _ in range(n_samples)]
+        return _aggregate_samples(samples)
+    result = _google_once(query, target_domains, keys)
+    result["cited_count"]  = 1 if result.get("cited") else 0
+    result["sample_count"] = 1
+    return result
+
+
+def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
+    """Single Gemini citation check call."""
     if not keys.google:
         return _citation_error("No Google API key provided.")
 
@@ -253,7 +290,45 @@ def check_citation_google(query: str, target_domains: list[str], keys: Keys) -> 
 
 
 def _citation_error(msg: str) -> dict:
-    return {"cited": None, "matched_url": None, "all_citations": [], "answer": "", "error": msg}
+    return {
+        "cited": None, "matched_url": None, "all_citations": [], "answer": "", "error": msg,
+        "cited_count": 0, "sample_count": 1,
+    }
+
+
+def _aggregate_samples(samples: list[dict]) -> dict:
+    """Combine N citation check results into one with confidence metrics."""
+    valid = [s for s in samples if s.get("error") is None and s.get("cited") is not None]
+    if not valid:
+        result = samples[-1].copy()
+        result["cited_count"]  = 0
+        result["sample_count"] = len(samples)
+        return result
+
+    cited_count  = sum(1 for s in valid if s["cited"] is True)
+    sample_count = len(valid)
+
+    # Use a cited sample's data when available, else the last valid one
+    best = next((s for s in valid if s["cited"]), valid[-1])
+
+    # Union of all citations across samples (preserve first-seen order)
+    seen_urls: set[str] = set()
+    all_cit: list[str]  = []
+    for s in valid:
+        for url in s.get("all_citations", []):
+            if url not in seen_urls:
+                seen_urls.add(url)
+                all_cit.append(url)
+
+    return {
+        "cited":         cited_count > 0,
+        "matched_url":   best.get("matched_url"),
+        "all_citations": all_cit,
+        "answer":        best.get("answer", ""),
+        "error":         None,
+        "cited_count":   cited_count,
+        "sample_count":  sample_count,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -383,50 +458,70 @@ def audit_page(
 # ---------------------------------------------------------------------------
 # ORCHESTRATION — one query end to end.
 # ---------------------------------------------------------------------------
-def run_audit(query: str, page_url: str, target_domains: list[str], org_name: str, keys: Keys) -> dict:
+def run_audit(
+    query: str,
+    page_url: str,
+    target_domains: list[str],
+    org_name: str,
+    keys: Keys,
+    n_samples: int = 1,
+) -> dict:
     """
     Full pipeline for a single query:
-      Perplexity check + ChatGPT check -> (if page URL given) scrape -> Claude audit.
+      Perplexity check + ChatGPT check + Google check -> (if page URL given) scrape -> Claude audit.
 
-    Claude audit runs if the page URL is provided AND either platform is not citing.
+    n_samples > 1 runs each citation check multiple times and returns confidence bands.
+    Claude audit always runs once (it's deterministic given the same page content).
     Returns a flat dict ready to drop into a results table.
     """
     result = {
-        "query":                  query,
-        "page_url":               page_url,
-        "perplexity_cited":       None,
-        "perplexity_matched_url": None,
-        "perplexity_citations":   [],
-        "chatgpt_cited":          None,
-        "chatgpt_matched_url":    None,
-        "chatgpt_citations":      [],
-        "google_cited":           None,
-        "google_matched_url":     None,
-        "google_citations":       [],
-        "google_error":           None,
-        "readiness_score":        None,
-        "verdict":                "",
-        "gaps":                   [],
-        "rewritten_section":      "",
-        "suggested_headings":     [],
-        "faq_schema":             "",
-        "error":                  None,
+        "query":                    query,
+        "page_url":                 page_url,
+        "perplexity_cited":         None,
+        "perplexity_matched_url":   None,
+        "perplexity_citations":     [],
+        "perplexity_cited_count":   None,
+        "perplexity_sample_count":  1,
+        "chatgpt_cited":            None,
+        "chatgpt_matched_url":      None,
+        "chatgpt_citations":        [],
+        "chatgpt_cited_count":      None,
+        "chatgpt_sample_count":     1,
+        "google_cited":             None,
+        "google_matched_url":       None,
+        "google_citations":         [],
+        "google_cited_count":       None,
+        "google_sample_count":      1,
+        "google_error":             None,
+        "readiness_score":          None,
+        "verdict":                  "",
+        "gaps":                     [],
+        "rewritten_section":        "",
+        "suggested_headings":       [],
+        "faq_schema":               "",
+        "error":                    None,
     }
 
-    perplexity = check_citation_perplexity(query, target_domains, keys)
-    chatgpt    = check_citation_chatgpt(query, target_domains, keys)
-    google     = check_citation_google(query, target_domains, keys)
+    perplexity = check_citation_perplexity(query, target_domains, keys, n_samples)
+    chatgpt    = check_citation_chatgpt(query, target_domains, keys, n_samples)
+    google     = check_citation_google(query, target_domains, keys, n_samples)
 
-    result["perplexity_cited"]       = perplexity["cited"]
-    result["perplexity_matched_url"] = perplexity["matched_url"]
-    result["perplexity_citations"]   = perplexity["all_citations"]
-    result["chatgpt_cited"]          = chatgpt["cited"]
-    result["chatgpt_matched_url"]    = chatgpt["matched_url"]
-    result["chatgpt_citations"]      = chatgpt["all_citations"]
-    result["google_cited"]           = google["cited"]
-    result["google_matched_url"]     = google["matched_url"]
-    result["google_citations"]       = google["all_citations"]
-    result["google_error"]           = google["error"]
+    result["perplexity_cited"]        = perplexity["cited"]
+    result["perplexity_matched_url"]  = perplexity["matched_url"]
+    result["perplexity_citations"]    = perplexity["all_citations"]
+    result["perplexity_cited_count"]  = perplexity.get("cited_count", 1 if perplexity.get("cited") else 0)
+    result["perplexity_sample_count"] = perplexity.get("sample_count", 1)
+    result["chatgpt_cited"]           = chatgpt["cited"]
+    result["chatgpt_matched_url"]     = chatgpt["matched_url"]
+    result["chatgpt_citations"]       = chatgpt["all_citations"]
+    result["chatgpt_cited_count"]     = chatgpt.get("cited_count", 1 if chatgpt.get("cited") else 0)
+    result["chatgpt_sample_count"]    = chatgpt.get("sample_count", 1)
+    result["google_cited"]            = google["cited"]
+    result["google_matched_url"]      = google["matched_url"]
+    result["google_citations"]        = google["all_citations"]
+    result["google_cited_count"]      = google.get("cited_count", 1 if google.get("cited") else 0)
+    result["google_sample_count"]     = google.get("sample_count", 1)
+    result["google_error"]            = google["error"]
 
     if perplexity["error"] and chatgpt["error"]:
         result["error"] = f"Perplexity: {perplexity['error']} | ChatGPT: {chatgpt['error']}"
@@ -560,3 +655,21 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
         return parsed
     except Exception as e:
         return {"error": f"Synthesis failed: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# PROOF-OF-FIX — re-check a single page after the user applies fixes.
+# ---------------------------------------------------------------------------
+def recheck_single(
+    query: str,
+    page_url: str,
+    target_domains: list[str],
+    org_name: str,
+    keys: Keys,
+    n_samples: int = 1,
+) -> dict:
+    """
+    Run a fresh single-query audit (citation checks + Claude audit) and return
+    the new result dict. The before/after comparison is done in the UI layer.
+    """
+    return run_audit(query, page_url, target_domains, org_name, keys, n_samples)

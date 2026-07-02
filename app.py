@@ -1,665 +1,862 @@
 """
-GEO Radar — Streamlit UI.
+GEO Radar — Streamlit UI (URL-first, confidence-default SaaS).
 
-Run locally:   streamlit run app.py
-Deploy:        push to GitHub, connect at share.streamlit.io.
-
-The team enters their own API keys in the sidebar each session.
-Keys are never stored — they only live in memory while the app is open.
-
-Four-step workflow:
-  Step 1 — Discover:  scrape Google + Reddit for real queries, Claude organizes them.
-  Step 2 — Crawl:     enter homepage URL, tool maps all pages and matches queries.
-  Step 3 — Review:    confirm query + page pairings, edit if needed.
-  Step 4 — Run:       Perplexity + ChatGPT citation check, Claude audit + fixes.
+One URL → everything auto-discovered.
+Citation checks always run 3× samples and show confidence bands.
+Managed deployments read API keys from env / Streamlit Secrets.
+Unconfigured deployments (e.g. a bare clone of the open-source repo)
+prompt the user for their own keys instead — see the sidebar BYOK block.
 """
 
-import io
 import csv
+import io
 import os
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 
-import radar
-import discover
+import auth
 import crawler
 import db
+import discover
+import radar
 from config import Keys
+from reports import generate_pdf
+
+# ---------------------------------------------------------------------------
+# Builder's API keys — loaded once at startup, never shown to users.
+# _BUILDER_KEYS_CONFIGURED is False for anyone running a bare clone of the
+# open-source repo without the managed .env / Secrets — those users are
+# prompted for their own keys in the sidebar instead (BYOK block below).
+# ---------------------------------------------------------------------------
+_KEYS = Keys(
+    anthropic=os.getenv("ANTHROPIC_API_KEY", ""),
+    openai=os.getenv("OPENAI_API_KEY", ""),
+    perplexity=os.getenv("PERPLEXITY_API_KEY", ""),
+    google=os.getenv("GOOGLE_API_KEY", ""),
+)
+_BUILDER_KEYS_CONFIGURED = bool(_KEYS.anthropic)
+
+# Set to True to bring back required accounts (Supabase email+password login).
+# Off for now — demos to small businesses should have zero signup friction.
+_REQUIRE_LOGIN = False
 
 db.init()
 
 st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
 
 # ---------------------------------------------------------------------------
+# Visual theme polish (presentation-only; does not touch widget keys,
+# session_state, or app logic). Reuses the same indigo/gray palette as the
+# PDF report generator (reports.py) for brand consistency between the live
+# app and the report a demo user actually walks away with.
+# NOTE: targets Streamlit's data-testid attributes (stable across versions
+# by convention) — a future Streamlit upgrade could rename these and break
+# the cosmetic styling only, never app functionality.
+# ---------------------------------------------------------------------------
+st.html("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+[data-testid="stToolbar"] { visibility: hidden; }
+[data-testid="stDecoration"] { display: none; }
+
+[data-testid="stMetric"] {
+    background: #F9FAFB; border: 1px solid #E5E7EB;
+    border-radius: 10px; padding: 16px;
+}
+[data-testid="stMetricLabel"] { color: #6B7280; }
+[data-testid="stMetricValue"] { color: #111827; }
+
+[data-testid="stDataFrame"] { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; }
+[data-testid="stExpander"] { background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 10px; }
+
+.stButton > button, [data-testid="stDownloadButton"] > button {
+    border-radius: 8px; font-weight: 600;
+    transition: opacity 0.2s, transform 0.2s;
+}
+.stButton > button[kind="primary"], [data-testid="stDownloadButton"] > button[kind="primary"] {
+    background: #6366F1; border: none; color: #FFFFFF;
+}
+.stButton > button[kind="primary"]:hover { opacity: 0.9; transform: translateY(-1px); }
+
+[data-testid="stSidebar"] { background: #F9FAFB; border-right: 1px solid #E5E7EB; }
+</style>
+""")
+
+# ---------------------------------------------------------------------------
+# Transfer any pending auto-fill values BEFORE widgets render.
+# (Streamlit forbids writing to a session_state key that's already bound to a
+# widget in the same script run — so we stage values in _pending_* keys and
+# flush them here at the very top of each run, before the sidebar renders.)
+# ---------------------------------------------------------------------------
+if "_pending_org_name" in st.session_state:
+    st.session_state["org_name"] = st.session_state.pop("_pending_org_name")
+if "_pending_domains_str" in st.session_state:
+    st.session_state["domains_str"] = st.session_state.pop("_pending_domains_str")
+
+# ---------------------------------------------------------------------------
 # Session state defaults
 # ---------------------------------------------------------------------------
-for key, default in {
-    "discovered":        {},
-    "query_text":        "",
-    "audit_done":        False,
-    "audit_results":     [],
-    "audit_synthesis":   {},
-    "crawled_pages":     [],
-    "page_matches":      {},
-    "selected_for_crawl": [],
-    "keys_set":          False,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+_DEFAULTS = {
+    "user":            None,
+    "auto_extracted":  None,   # result of auto_extract_business_info
+    "audit_table":     [],     # list of {include, query, page_url}
+    "audit_done":      False,
+    "audit_results":   [],
+    "audit_synthesis": {},
+    "recheck_results": {},
+    "quick_mode":      False,  # True = 1× samples; False (default) = 3×
+    "stale_checked":   False,
+    "stale_orgs":      [],
+    "signup_pending":  False,
+    "using_tracked":   False,  # True when audit_table was pre-loaded from tracked_queries
+}
+for _k, _v in _DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+# Resolve current user (dev user when Supabase not configured)
+_current = auth.get_current_user()
+if _current and not st.session_state.user:
+    st.session_state.user = _current
+
+# Guest mode: skip login entirely. Each browser session gets its own random
+# id so demo data (org names, tracked queries, run history) never collides
+# between different small businesses trying the tool independently.
+if not _REQUIRE_LOGIN and not st.session_state.user:
+    if "_guest_id" not in st.session_state:
+        st.session_state["_guest_id"] = str(uuid.uuid4())
+    st.session_state.user = {"id": st.session_state["_guest_id"], "email": "guest@geo-radar.local"}
 
 # ---------------------------------------------------------------------------
-# Header
+# Badge helpers
 # ---------------------------------------------------------------------------
-st.title("📡 GEO Radar")
-st.caption(
-    "Find real queries → crawl your site → check ChatGPT and Perplexity → "
-    "get Claude's exact fixes to make your pages citable."
-)
+def _cite_badge(cited, cited_count=None, sample_count=1) -> str:
+    if sample_count and sample_count > 1 and cited_count is not None:
+        if cited_count >= sample_count:
+            return f"✅ High ({cited_count}/{sample_count})"
+        if cited_count > 0:
+            label = "Likely" if cited_count / sample_count >= 0.67 else "Uncertain"
+            return f"⚠️ {label} ({cited_count}/{sample_count})"
+        return f"❌ Not cited (0/{sample_count})"
+    return "✅ Cited" if cited else ("❌ Not cited" if cited is False else "⚠️ No key")
 
-# ---------------------------------------------------------------------------
-# Sidebar — Organization + API keys
-# ---------------------------------------------------------------------------
-with st.sidebar:
-    st.header("Organization")
-    org_name = st.text_input("Organization name", value="Your Organization")
-    domains_raw = st.text_input(
-        "Your domains (comma-separated)",
-        value="yourdomain.com",
-        help="Used to detect when a citation points to you. No https needed.",
+
+def citation_badge(r: dict, engine: str) -> str:
+    return _cite_badge(
+        r.get(f"{engine}_cited"),
+        r.get(f"{engine}_cited_count"),
+        r.get(f"{engine}_sample_count", 1),
     )
-    target_domains = [d.strip() for d in domains_raw.split(",") if d.strip()]
-
-    st.divider()
-
-    # ── API Keys ─────────────────────────────────────────────────────────────
-    st.header("🔑 API Keys")
-    st.caption(
-        "Your keys are never saved. They only exist while this tab is open. "
-        "You will need to re-enter them each session."
-    )
-
-    perplexity_key = st.text_input(
-        "Perplexity API key",
-        type="password",
-        placeholder="Paste your Perplexity key here",
-        help="Get yours at perplexity.ai/settings/api",
-        value=os.getenv("PERPLEXITY_API_KEY", ""),
-    )
-    openai_key = st.text_input(
-        "OpenAI (ChatGPT) API key",
-        type="password",
-        placeholder="Paste your OpenAI key here",
-        help="Get yours at platform.openai.com/api-keys",
-        value=os.getenv("OPENAI_API_KEY", ""),
-    )
-    anthropic_key = st.text_input(
-        "Anthropic (Claude) API key",
-        type="password",
-        placeholder="Paste your Anthropic key here",
-        help="Get yours at console.anthropic.com",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
-    )
-    google_key = st.text_input(
-        "Google AI API key",
-        type="password",
-        placeholder="Paste your Google AI Studio key here",
-        help="Get yours at aistudio.google.com — required for Google AI citation check.",
-        value=os.getenv("GOOGLE_API_KEY", ""),
-    )
-
-    keys = Keys(
-        anthropic=anthropic_key,
-        openai=openai_key,
-        perplexity=perplexity_key,
-        google=google_key,
-    )
-
-    keys_ready = all([perplexity_key, openai_key, anthropic_key, google_key])
-
-    if keys_ready:
-        st.success("✅ All keys entered. Ready to run.")
-    else:
-        missing = []
-        if not perplexity_key: missing.append("Perplexity")
-        if not openai_key:     missing.append("OpenAI")
-        if not anthropic_key:  missing.append("Anthropic")
-        if not google_key:     missing.append("Google AI")
-        st.warning(f"Missing: {', '.join(missing)}")
-
-    st.divider()
-    st.markdown("**APIs used**")
-    st.markdown(
-        "🔵 Perplexity — citation check  \n"
-        "🟢 ChatGPT — citation check  \n"
-        "🔴 Google AI — citation check (optional)  \n"
-        "🟠 Claude — discovery, matching + audit"
-    )
-    st.divider()
-    st.markdown(
-        "**Estimated costs**  \n"
-        "Discovery + crawl: ~$0.03  \n"
-        "20 queries once/month: ~$1.20  \n"
-        "20 queries weekly: ~$4.80/month  \n\n"
-        "All costs come out of your own API accounts."
-    )
-
-    st.divider()
-    with st.expander("Where do I get API keys?"):
-        st.markdown(
-            "**Perplexity**  \n"
-            "Go to perplexity.ai → sign in → Settings → API  \n\n"
-            "**OpenAI (ChatGPT)**  \n"
-            "Go to platform.openai.com → sign in → API Keys → Create  \n\n"
-            "**Anthropic (Claude)**  \n"
-            "Go to console.anthropic.com → sign in → API Keys → Create  \n\n"
-            "Each service requires a small credit balance to start ($5 each). "
-            "At this tool's usage level, $5 lasts several months."
-        )
-
-# ---------------------------------------------------------------------------
-# Helpers — defined here so they are available in both the demo and results
-# ---------------------------------------------------------------------------
-def citation_badge(cited) -> str:
-    if cited is None:
-        return "⚠️ No key"
-    return "✅ Cited" if cited else "❌ Not cited"
 
 
 def google_badge(r: dict) -> str:
-    cited = r.get("google_cited")
-    if cited is True:
-        return "✅ Cited"
-    if cited is False:
-        return "❌ Not cited"
-    error = r.get("google_error", "")
-    if error and "No Google API key" not in error:
-        return "⚠️ Error"
-    return "⚑ No key"
+    if r.get("google_cited") in (True, False):
+        return citation_badge(r, "google")
+    err = r.get("google_error", "")
+    return "⚠️ Error" if (err and "No Google API key" not in err) else "⚑ No key"
 
 
 # ---------------------------------------------------------------------------
-# Gate — show demo landing page until keys are entered
+# SIDEBAR
 # ---------------------------------------------------------------------------
-if not keys_ready:
+with st.sidebar:
+    st.markdown("## 📡 GEO Radar")
 
-    st.markdown(
-        "GEO Radar checks whether your business is being cited by AI answer engines — "
-        "Perplexity, ChatGPT, and Google AI — then gives you the exact content fixes to change that. "
-        "Enter your API keys in the sidebar to run a real audit on your own site."
+    if st.session_state.user:
+        user      = st.session_state.user
+        is_guest  = user.get("email") == "guest@geo-radar.local"
+        if not is_guest:
+            st.caption(f"👤 {user['email']}")
+        if st.button("🔄 Start over" if is_guest else "Log out", use_container_width=True):
+            auth.logout()
+            for k in ("auto_extracted", "audit_table", "audit_done", "audit_results",
+                      "audit_synthesis", "recheck_results", "stale_checked", "stale_orgs",
+                      "org_name", "domains_str", "use_own_keys",
+                      "byok_anthropic", "byok_openai", "byok_perplexity", "byok_google"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+        st.divider()
+        st.subheader("Client")
+
+        # ── Past client switcher ──────────────────────────────────────────
+        try:
+            past_orgs = db.get_user_orgs(user["id"])
+        except Exception:
+            past_orgs = []
+
+        if past_orgs:
+            org_options     = ["➕ New client"] + past_orgs
+            selected_client = st.selectbox("Switch client", org_options,
+                                            label_visibility="collapsed",
+                                            key="client_switcher")
+            if selected_client != "➕ New client":
+                if st.session_state.get("_last_client") != selected_client:
+                    st.session_state["_last_client"]         = selected_client
+                    st.session_state["_pending_org_name"]    = selected_client
+                    st.session_state["_pending_domains_str"] = ""
+                    try:
+                        tracked = db.get_tracked_queries(user["id"], selected_client)
+                        if tracked:
+                            st.session_state.audit_table = [
+                                {"include": True, "query": t["query"], "page_url": t.get("page_url", "")}
+                                for t in tracked
+                            ]
+                            st.session_state.using_tracked  = True
+                            st.session_state.auto_extracted = {
+                                "org_name": selected_client, "services": "",
+                                "audience": "", "domains": [],
+                            }
+                            st.session_state.audit_done      = False
+                            st.session_state.recheck_results = {}
+                    except Exception:
+                        pass
+                    st.rerun()
+
+        # ── Org name & domains (auto-filled after URL analysis) ───────────
+        if "org_name" not in st.session_state:
+            st.session_state["org_name"] = ""
+        if "domains_str" not in st.session_state:
+            st.session_state["domains_str"] = ""
+
+        st.text_input("Organization name", key="org_name",
+                      placeholder="Auto-filled from your website")
+        st.text_input("Your domains (comma-separated)", key="domains_str",
+                      placeholder="Auto-filled from your website URL")
+
+        st.divider()
+        prepared_by = st.text_input(
+            "Prepared by (for PDF reports)", value="GEO Radar",
+            help="Appears on the PDF cover page.",
+        )
+
+        st.divider()
+        st.session_state.quick_mode = st.toggle(
+            "Quick check (1× per engine)",
+            value=st.session_state.quick_mode,
+            help="Skips confidence sampling. Faster but results can vary run-to-run.",
+        )
+        if st.session_state.quick_mode:
+            st.caption("Single sample. Results may vary between runs.")
+        else:
+            st.caption("✓ Confidence mode — 3 samples · High / Likely / Uncertain.")
+
+        st.divider()
+        if _BUILDER_KEYS_CONFIGURED:
+            st.session_state.use_own_keys = st.toggle(
+                "🔑 Use my own API keys",
+                value=st.session_state.get("use_own_keys", False),
+                help="Run audits with your own Anthropic/OpenAI/Perplexity/Google keys instead of this deployment's managed keys.",
+            )
+        else:
+            st.info(
+                "No managed API keys are configured for this deployment — "
+                "enter your own below to run audits.",
+                icon="🔑",
+            )
+            st.session_state.use_own_keys = True
+
+        if st.session_state.use_own_keys:
+            st.text_input("Anthropic API key",   type="password", key="byok_anthropic")
+            st.text_input("OpenAI API key",      type="password", key="byok_openai")
+            st.text_input("Perplexity API key",  type="password", key="byok_perplexity")
+            st.text_input("Google AI API key",   type="password", key="byok_google")
+            st.caption(
+                "Used only for this browser session — never stored, logged, "
+                "or sent anywhere except directly to each provider's API."
+            )
+        else:
+            st.caption("**Powered by**  \nPerplexity · OpenAI · Google AI · Anthropic")
+
+    else:
+        # ── Login / Signup ────────────────────────────────────────────────
+        st.caption("Sign in to run real audits on your site.")
+        tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
+
+        with tab_login:
+            login_email = st.text_input("Email", key="login_email")
+            login_pass  = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Log in", type="primary", use_container_width=True):
+                if login_email and login_pass:
+                    res = auth.login(login_email, login_pass)
+                    if res.get("user"):
+                        st.session_state.user = res["user"]
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Login failed."))
+                else:
+                    st.warning("Enter your email and password.")
+
+        with tab_signup:
+            if st.session_state.signup_pending:
+                st.success("Check your email to confirm, then log in.")
+                if st.button("Back to log in"):
+                    st.session_state.signup_pending = False
+                    st.rerun()
+            else:
+                su_email = st.text_input("Email", key="signup_email")
+                su_pass  = st.text_input("Password (min 6 chars)", type="password", key="signup_pass")
+                if st.button("Create account", type="primary", use_container_width=True):
+                    if su_email and su_pass:
+                        res = auth.signup(su_email, su_pass)
+                        if res.get("user"):
+                            st.session_state.user = res["user"]
+                            st.rerun()
+                        elif res.get("needs_confirmation"):
+                            st.session_state.signup_pending = True
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Sign up failed."))
+                    else:
+                        st.warning("Enter your email and password.")
+
+# ---------------------------------------------------------------------------
+# Swap in user-supplied keys if BYOK is active (bare clone or opted-in toggle).
+# Falls back to whatever the user left blank being an empty string, same as
+# the builder-key path — downstream code already handles missing keys per-engine.
+# ---------------------------------------------------------------------------
+if st.session_state.get("use_own_keys"):
+    _KEYS = Keys(
+        anthropic=st.session_state.get("byok_anthropic", "") or "",
+        openai=st.session_state.get("byok_openai", "") or "",
+        perplexity=st.session_state.get("byok_perplexity", "") or "",
+        google=st.session_state.get("byok_google", "") or "",
     )
 
-    st.markdown("#### How it works")
+# ---------------------------------------------------------------------------
+# AUTH GATE — logged-out visitors see the demo landing page
+# ---------------------------------------------------------------------------
+if not st.session_state.user:
+    st.title("📡 GEO Radar")
+    st.subheader("AI Visibility Audit — Are you being cited by ChatGPT, Perplexity, and Google AI?")
+    st.markdown(
+        "GEO Radar checks whether your business is cited by the three AI answer engines "
+        "replacing traditional search — then gives you the **exact content fixes** to change that. "
+        "Rewrite, headings, FAQ schema — ready to paste."
+    )
     h1, h2, h3, h4 = st.columns(4)
-    h1.markdown("**1 — Discover**  \nFind the real questions buyers, partners, and media ask about your category")
-    h2.markdown("**2 — Match**  \nCrawl your site and map each query to your most relevant page")
-    h3.markdown("**3 — Check**  \nSee whether Perplexity, ChatGPT, and Google AI are citing you for each query")
-    h4.markdown("**4 — Fix**  \nGet a rewritten content block, question-phrased headings, and FAQ schema for every gap")
+    h1.markdown("**1 — Discover**  \nReal buyer questions from Google and Reddit")
+    h2.markdown("**2 — Match**  \nMap every site page to the queries that should land there")
+    h3.markdown("**3 — Check**  \nSee who's citing you on Perplexity, ChatGPT, and Google AI")
+    h4.markdown("**4 — Fix**  \nGet a rewrite, headings, and FAQ schema for every gap")
 
     st.divider()
-    st.markdown("#### Sample audit — Nexus Consulting (B2B strategy firm)")
-    st.info(
-        "This is sample output showing exactly what your audit will look like. "
-        "Enter your API keys in the sidebar to run it on your own site.",
-        icon="ℹ️",
-    )
+    st.markdown("#### Sample audit — Nexus Consulting")
+    st.info("Sign up in the sidebar to run a real audit on your own site.", icon="ℹ️")
 
     _demo = [
         {
             "query": "go-to-market strategy for B2B SaaS",
             "perplexity_cited": False, "chatgpt_cited": False, "google_cited": False,
-            "readiness_score": 12,
-            "verdict": "The page is a generic services list with no direct answer to this query.",
+            "readiness_score": 12, "verdict": "Generic services list — no direct answer to this query.",
             "perplexity_citations": ["https://notion.so/blog/gtm-strategy", "https://hubspot.com/go-to-market"],
             "chatgpt_citations": ["https://a16z.com/go-to-market", "https://openviewpartners.com/gtm"],
             "google_citations": ["https://hbr.org/gtm-saas", "https://mckinsey.com/saas-growth"],
             "perplexity_matched_url": None, "chatgpt_matched_url": None, "google_matched_url": None,
+            "perplexity_cited_count": 0, "perplexity_sample_count": 3,
+            "chatgpt_cited_count": 0, "chatgpt_sample_count": 3,
+            "google_cited_count": 0, "google_sample_count": 3,
             "gaps": [
-                "No direct answer to 'what is a B2B SaaS GTM strategy' in the opening paragraph",
-                "No statistics, timelines, or named client outcomes — AI engines do not cite vague service descriptions",
-                "Missing FAQPage schema — competitor pages with schema consistently outperform on AI citations",
+                "No direct answer in the opening paragraph",
+                "No statistics, timelines, or named client outcomes",
+                "Missing FAQPage schema",
             ],
-            "rewritten_section": (
-                "A B2B SaaS go-to-market strategy defines how you acquire your first 100 customers, "
-                "which channels drive repeatable revenue, and when to expand beyond your initial segment. "
-                "Nexus Consulting builds GTM strategies for Series A–C SaaS companies, typically reducing "
-                "time-to-first-enterprise-deal by 40% through ICP refinement and channel sequencing. "
-                "[ORG TO CONFIRM: average deal cycle, named client result]"
-            ),
-            "suggested_headings": [
-                "What does a B2B SaaS go-to-market strategy include?",
-                "How long does it take to build a GTM strategy for a SaaS company?",
-            ],
-            "faq_schema": (
-                '<script type="application/ld+json">\n'
-                '{\n  "@context": "https://schema.org",\n  "@type": "FAQPage",\n'
-                '  "mainEntity": [{\n    "@type": "Question",\n'
-                '    "name": "What does a B2B SaaS go-to-market strategy include?",\n'
-                '    "acceptedAnswer": {\n      "@type": "Answer",\n'
-                '      "text": "A B2B SaaS GTM strategy includes ICP definition, channel selection, '
-                'sales motion design, and a sequenced expansion plan."\n    }\n  }]\n}\n'
-                '</script>'
-            ),
-            "page_url": "https://nexusconsulting.com/services", "error": None,
+            "rewritten_section": "A B2B SaaS go-to-market strategy defines how you acquire your first 100 customers...",
+            "suggested_headings": ["What does a B2B SaaS go-to-market strategy include?"],
+            "faq_schema": "", "page_url": "https://nexusconsulting.com/services", "error": None,
         },
         {
             "query": "GTM consulting for enterprise software companies",
             "perplexity_cited": True, "chatgpt_cited": False, "google_cited": False,
-            "readiness_score": 54,
-            "verdict": "Perplexity cites the client roster page, but ChatGPT and Google AI find no direct answer to the enterprise GTM question.",
+            "readiness_score": 54, "verdict": "Perplexity cites the client roster. ChatGPT and Google AI find no direct answer.",
             "perplexity_citations": [],
-            "chatgpt_citations": ["https://bain.com/gtm-consulting", "https://mckinsey.com/enterprise-software"],
+            "chatgpt_citations": ["https://bain.com/gtm-consulting"],
             "google_citations": ["https://gartner.com/gtm-enterprise"],
             "perplexity_matched_url": "https://nexusconsulting.com/clients",
             "chatgpt_matched_url": None, "google_matched_url": None,
-            "gaps": [
-                "Enterprise-specific content is buried — the page targets all company sizes with the same copy",
-                "No answer to 'how do you run GTM for enterprise software' visible in the first screen",
-                "Missing case study with a named enterprise client, deal size, or sales cycle data",
-            ],
-            "rewritten_section": (
-                "Nexus Consulting specializes in GTM strategy for enterprise software companies "
-                "selling to Fortune 1000 buyers, typically with deal sizes above $50,000 ARR. "
-                "[ORG TO CONFIRM: exact deal size range, named enterprise client]"
-            ),
-            "suggested_headings": [
-                "How does GTM strategy differ for enterprise vs. SMB software companies?",
-                "What results do enterprise software companies see from GTM consulting?",
-            ],
-            "faq_schema": "",
-            "page_url": "https://nexusconsulting.com/enterprise", "error": None,
+            "perplexity_cited_count": 2, "perplexity_sample_count": 3,
+            "chatgpt_cited_count": 0, "chatgpt_sample_count": 3,
+            "google_cited_count": 0, "google_sample_count": 3,
+            "gaps": ["Enterprise content is buried", "Missing named enterprise client case study"],
+            "rewritten_section": "Nexus Consulting specializes in GTM strategy for enterprise software companies...",
+            "suggested_headings": ["How does GTM strategy differ for enterprise vs. SMB software?"],
+            "faq_schema": "", "page_url": "https://nexusconsulting.com/enterprise", "error": None,
         },
         {
             "query": "how to build a sales motion for SaaS",
             "perplexity_cited": False, "chatgpt_cited": True, "google_cited": True,
-            "readiness_score": 71,
-            "verdict": "ChatGPT and Google AI cite the blog post for its step-by-step breakdown, but Perplexity favors pages with embedded benchmark statistics.",
+            "readiness_score": 71, "verdict": "ChatGPT and Google AI cite the blog. Perplexity needs benchmark statistics.",
             "perplexity_citations": ["https://salesforce.com/blog/saas-sales-motion"],
-            "chatgpt_citations": [],
-            "google_citations": [],
+            "chatgpt_citations": [], "google_citations": [],
             "perplexity_matched_url": None,
             "chatgpt_matched_url": "https://nexusconsulting.com/blog/saas-sales-motion",
             "google_matched_url": "https://nexusconsulting.com/blog/saas-sales-motion",
-            "gaps": [
-                "No benchmark statistics — Perplexity citations consistently include conversion rates or timeline data",
-                "The numbered steps are strong but lack outcome data per step",
-            ],
-            "rewritten_section": (
-                "Building a SaaS sales motion starts with defining your ICP, then sequencing outbound, "
-                "inbound, and partner channels by deal size. Companies that nail their sales motion in "
-                "the first 18 months typically see 2–3x faster ramp times for new reps. "
-                "[ORG TO CONFIRM: client benchmark data]"
-            ),
-            "suggested_headings": [
-                "What are the five stages of a SaaS sales motion?",
-                "How do you know when your SaaS sales motion is working?",
-            ],
-            "faq_schema": "",
-            "page_url": "https://nexusconsulting.com/blog/saas-sales-motion", "error": None,
+            "perplexity_cited_count": 0, "perplexity_sample_count": 3,
+            "chatgpt_cited_count": 3, "chatgpt_sample_count": 3,
+            "google_cited_count": 2, "google_sample_count": 3,
+            "gaps": ["No benchmark statistics — Perplexity cites pages with conversion rate data"],
+            "rewritten_section": "Building a SaaS sales motion starts with defining your ICP...",
+            "suggested_headings": ["What are the five stages of a SaaS sales motion?"],
+            "faq_schema": "", "page_url": "https://nexusconsulting.com/blog/saas-sales-motion", "error": None,
         },
     ]
     _demo_synthesis = {
         "root_causes": [
-            "Pages are written for human browsing, not machine extraction — answers are buried rather than leading",
-            "No statistics, named outcomes, or specific timelines anywhere on the site — AI engines consistently prefer pages with concrete evidence",
-            "FAQPage schema is absent across all audited pages, giving competitor pages a structural citation advantage",
+            "Pages are written for human browsing — answers are buried rather than leading",
+            "No statistics, named outcomes, or specific timelines anywhere on the site",
+            "FAQPage schema absent across all audited pages",
         ],
         "priority_fixes": [
-            "Add a direct-answer opening paragraph to every service page — the first sentence must answer the query, not describe the company",
-            "Add at least two concrete data points per page (deal size, timeline, client category, or percentage outcome)",
-            "Implement FAQPage schema on the top five pages — this alone will measurably improve Google AI citation rate",
+            "Add a direct-answer opening paragraph to every service page",
+            "Add at least two concrete data points per page",
+            "Implement FAQPage schema on the top five pages",
         ],
     }
 
-    # Metrics
-    _total = len(_demo)
-    _perp  = sum(1 for r in _demo if r["perplexity_cited"])
-    _gpt   = sum(1 for r in _demo if r["chatgpt_cited"])
-    _goog  = sum(1 for r in _demo if r.get("google_cited"))
-    _all3  = sum(1 for r in _demo if r.get("perplexity_cited") and r.get("chatgpt_cited") and r.get("google_cited"))
+    total = len(_demo)
     dm1, dm2, dm3, dm4, dm5 = st.columns(5)
-    dm1.metric("Queries checked",     _total)
-    dm2.metric("Cited on Perplexity", f"{_perp}/{_total}")
-    dm3.metric("Cited on ChatGPT",    f"{_gpt}/{_total}")
-    dm4.metric("Cited on Google AI",  f"{_goog}/{_total}")
-    dm5.metric("Cited on all 3",      f"{_all3}/{_total}")
+    dm1.metric("Queries checked",     total)
+    dm2.metric("Cited on Perplexity", f"{sum(1 for r in _demo if r['perplexity_cited'])}/{total}")
+    dm3.metric("Cited on ChatGPT",    f"{sum(1 for r in _demo if r['chatgpt_cited'])}/{total}")
+    dm4.metric("Cited on Google AI",  f"{sum(1 for r in _demo if r.get('google_cited'))}/{total}")
+    dm5.metric("Cited on all 3",      f"{sum(1 for r in _demo if r['perplexity_cited'] and r['chatgpt_cited'] and r.get('google_cited'))}/{total}")
 
-    # Results table
-    _rows = []
-    for r in _demo:
-        _rows.append({
-            "Query":      r["query"],
-            "Perplexity": citation_badge(r["perplexity_cited"]),
-            "ChatGPT":    citation_badge(r["chatgpt_cited"]),
-            "Google AI":  citation_badge(r.get("google_cited")),
-            "Readiness":  r["readiness_score"],
-            "Verdict":    r["verdict"],
-        })
-    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame([{
+        "Query":      r["query"],
+        "Perplexity": citation_badge(r, "perplexity"),
+        "ChatGPT":    citation_badge(r, "chatgpt"),
+        "Google AI":  google_badge(r),
+        "Readiness":  r["readiness_score"],
+        "Verdict":    r["verdict"],
+    } for r in _demo]), use_container_width=True, hide_index=True)
 
-    # Strategic diagnosis
     st.divider()
-    st.markdown("### Strategic diagnosis")
-    st.caption("Root causes across all queries — not per-page symptoms.")
-    _rc, _pf = st.columns(2)
-    with _rc:
+    col_rc, col_pf = st.columns(2)
+    with col_rc:
         st.markdown("**Root causes**")
-        for cause in _demo_synthesis["root_causes"]:
-            st.markdown(f"- {cause}")
-    with _pf:
-        st.markdown("**Priority fixes (highest impact first)**")
-        for i, fix in enumerate(_demo_synthesis["priority_fixes"], 1):
-            st.markdown(f"{i}. {fix}")
-
-    # One fully expanded Fix
-    st.markdown("### Fixes")
-    _r = _demo[0]
-    with st.expander(
-        f"{_r['query']}   |   "
-        f"Perplexity {citation_badge(_r['perplexity_cited'])}   "
-        f"ChatGPT {citation_badge(_r['chatgpt_cited'])}   "
-        f"Google AI {citation_badge(_r.get('google_cited'))}   ·   readiness {_r['readiness_score']}/100",
-        expanded=True,
-    ):
-        _cp, _cg, _cgg = st.columns(3)
-        with _cp:
-            st.markdown("**Perplexity**")
-            st.error("Not citing you. Currently citing:")
-            for c in _r["perplexity_citations"]:
-                st.write(f"- {c}")
-        with _cg:
-            st.markdown("**ChatGPT**")
-            st.error("Not citing you. Currently citing:")
-            for c in _r["chatgpt_citations"]:
-                st.write(f"- {c}")
-        with _cgg:
-            st.markdown("**Google AI**")
-            st.error("Not citing you. Currently citing:")
-            for c in _r["google_citations"]:
-                st.write(f"- {c}")
-        st.divider()
-        st.markdown("**What is missing on the page**")
-        for g in _r["gaps"]:
-            st.write(f"- {g}")
-        st.markdown("**Answer-first rewrite**")
-        st.info(_r["rewritten_section"])
-        st.markdown("**Suggested question-phrased headings**")
-        for h in _r["suggested_headings"]:
-            st.write(f"- {h}")
-        st.markdown("**FAQ schema — paste into the page's `<head>`**")
-        st.code(_r["faq_schema"], language="html")
+        for c in _demo_synthesis["root_causes"]:
+            st.markdown(f"- {c}")
+    with col_pf:
+        st.markdown("**Priority fixes**")
+        for i, f in enumerate(_demo_synthesis["priority_fixes"], 1):
+            st.markdown(f"{i}. {f}")
 
     st.divider()
-    st.markdown("### Ready to audit your own site?")
-    st.markdown(
-        "Enter your **Perplexity**, **OpenAI**, **Anthropic**, and **Google AI** API keys in the sidebar. "
-        "Each key requires a small credit balance — $5 per service lasts several months at this tool's usage level. "
-        "Expand **'Where do I get API keys?'** in the sidebar for step-by-step instructions."
-    )
+    st.markdown("👈 **Sign up or log in in the sidebar** to audit your own site.")
+    st.caption("Want early access? Email [stephenzicky@gmail.com](mailto:stephenzicky@gmail.com) — we're onboarding early users now.")
     st.stop()
 
+
+# ===========================================================================
+# AUTHENTICATED APP
+# ===========================================================================
+user        = st.session_state.user
+n_samples   = 1 if st.session_state.quick_mode else 3
+prepared_by = "GEO Radar"  # re-read from sidebar if it was set above
+
+st.title("📡 GEO Radar")
+st.caption("Enter your website URL — we'll discover real queries, map your pages, and check all three AI engines.")
+
 # ---------------------------------------------------------------------------
-# STEP 1 — DISCOVER REAL QUERIES
+# Stale org scan reminder (checked once per login session)
 # ---------------------------------------------------------------------------
-st.subheader("Step 1 — Find real questions people ask")
-st.write(
-    "Tell us what your organization does. We scrape Google and Reddit "
-    "for questions real people actually ask, then Claude organizes them."
-)
-
-with st.form("discovery_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        services = st.text_input(
-            "What services do you offer?",
-            placeholder="web design, SEO consulting, social media management",
-        )
-        audience = st.text_input(
-            "Who do you serve?",
-            placeholder="small businesses, startups, local brands",
-        )
-    with col2:
-        location = st.text_input("City or region (leave blank if global)", value="")
-
-    st.markdown("**Intent categories** — who is searching for you?")
-    cat_col1, cat_col2, cat_col3 = st.columns(3)
-    with cat_col1:
-        cat1 = st.text_input("Category 1", value="customers", help="e.g. customers, buyers, patients")
-    with cat_col2:
-        cat2 = st.text_input("Category 2", value="partners")
-    with cat_col3:
-        cat3 = st.text_input("Category 3", value="media")
-
-    discover_btn = st.form_submit_button("🔍 Find real queries", type="primary")
-
-if discover_btn:
+if not st.session_state.stale_checked:
     try:
-        categories = [c.strip().lower().replace(" ", "_") for c in [cat1, cat2, cat3] if c.strip()]
+        st.session_state.stale_orgs = db.get_stale_orgs(user["id"], days=14)
     except Exception:
-        categories = ["customers", "partners", "media"]
-    if not categories:
-        categories = ["customers", "partners", "media"]
+        st.session_state.stale_orgs = []
+    st.session_state.stale_checked = True
 
-    if not services or not audience:
-        st.warning("Fill in services and audience to discover queries.")
-    else:
-        progress_placeholder = st.empty()
+for stale in st.session_state.stale_orgs:
+    st.warning(
+        f"**{stale['org_name']}** hasn't been audited in {stale['days_ago']} days — "
+        "AI engines may have changed. Enter the site URL below to re-audit.",
+        icon="⚠️",
+    )
 
-        def update_progress(msg):
-            progress_placeholder.info(f"⏳ {msg}")
+# ---------------------------------------------------------------------------
+# CLIENT OVERVIEW — all-clients summary
+# ---------------------------------------------------------------------------
+try:
+    _dash_summary = db.get_all_orgs_summary(user["id"])
+except Exception:
+    _dash_summary = []
 
-        with st.spinner("Scraping Google and Reddit for real queries..."):
-            result = discover.discover_queries(
-                org_name=org_name,
-                services=services,
-                audience=audience,
-                location=location,
-                categories=categories,
-                progress_callback=update_progress,
-                keys=keys,
-            )
-
-        progress_placeholder.empty()
-
-        if result.get("error"):
-            st.error(f"Discovery failed: {result['error']}")
-        else:
-            SKIP_KEYS = {"error", "raw_count", "seeds_used"}
-            st.session_state.discovered = {k: v for k, v in result.items() if k not in SKIP_KEYS and isinstance(v, list)}
-            st.success(
-                f"Found {result.get('raw_count', 0)} real queries from Google and Reddit. "
-                "Claude organized the best ones below."
-            )
-
-# Show discovered queries as checkboxes
-if st.session_state.discovered:
-    st.markdown("**Select the queries you want to audit:**")
-
-    discovered_keys = list(st.session_state.discovered.keys())
-    selected_queries = []
-    cols = st.columns(max(len(discovered_keys), 1))
-
-    for col_idx, intent_key in enumerate(discovered_keys):
-        queries = st.session_state.discovered.get(intent_key, [])
-        label = intent_key.replace("_", " ").title()
-        with cols[col_idx]:
-            st.markdown(f"**{label}**")
-            if queries:
-                for q in queries:
-                    if st.checkbox(q, key=f"chk_{intent_key}_{q}"):
-                        selected_queries.append(q)
+if _dash_summary:
+    _n_clients = len(_dash_summary)
+    with st.expander(
+        f"📊 Client overview — {_n_clients} client{'s' if _n_clients != 1 else ''}",
+        expanded=not st.session_state.audit_done,
+    ):
+        _now = datetime.now(timezone.utc)
+        _dash_rows = []
+        for _o in _dash_summary:
+            _qc   = _o.get("query_count") or 0
+            _rate = round(_o["cited_count"] / _qc * 100) if _qc else 0
+            try:
+                _last_dt  = datetime.fromisoformat(_o["last_run_date"].replace("Z", "+00:00"))
+                _days_ago = (_now - _last_dt).days
+            except Exception:
+                _days_ago = 0
+            if _days_ago <= 7:
+                _status = "✅ Current"
+            elif _days_ago <= 14:
+                _status = "⚠️ Refresh soon"
             else:
-                st.caption("No queries found for this intent.")
-
-    if selected_queries:
-        st.info(f"{len(selected_queries)} queries selected.")
-        if st.button("➕ Add selected queries and crawl my site below"):
-            st.session_state.selected_for_crawl = selected_queries
-            st.rerun()
-
-st.divider()
-
-# ---------------------------------------------------------------------------
-# STEP 2 — CRAWL THE SITE
-# ---------------------------------------------------------------------------
-st.subheader("Step 2 — Crawl your website")
-st.write(
-    "Enter your homepage URL. The tool maps every page on your site "
-    "and automatically matches each query to the most relevant page."
-)
-
-homepage_url = st.text_input(
-    "Homepage URL",
-    placeholder="https://yourwebsite.com",
-)
-
-crawl_btn = st.button("🕷️ Crawl site and match pages", type="primary")
-
-if crawl_btn:
-    selected = st.session_state.get("selected_for_crawl", [])
-
-    if not homepage_url:
-        st.warning("Enter your homepage URL first.")
-    elif not selected:
-        st.warning("Select queries in Step 1 first.")
-    else:
-        progress_placeholder = st.empty()
-
-        def crawl_progress(msg):
-            progress_placeholder.info(f"⏳ {msg}")
-
-        with st.spinner("Crawling site and matching pages..."):
-            result = crawler.map_site_and_match(
-                homepage_url=homepage_url,
-                queries=selected,
-                org_name=org_name,
-                keys=keys,
-                max_pages=60,
-                progress_callback=crawl_progress,
-            )
-
-        progress_placeholder.empty()
-
-        if result.get("error"):
-            st.error(result["error"])
-        else:
-            st.session_state.crawled_pages = result["pages"]
-            st.session_state.page_matches  = result["matches"]
-
-            matched_count = sum(1 for v in result["matches"].values() if v)
-            st.success(
-                f"Crawled {len(result['pages'])} pages. "
-                f"Matched {matched_count}/{len(selected)} queries to pages automatically."
-            )
-
-            lines = []
-            for q in selected:
-                url = result["matches"].get(q, "")
-                lines.append(f"{q} | {url}" if url else q)
-            st.session_state.query_text = "\n".join(lines)
-
-if st.session_state.page_matches:
-    st.markdown("**Query to page matches — edit any URL if needed:**")
-    for q, url in st.session_state.page_matches.items():
-        if url:
-            st.write(f"✅ **{q}**  →  {url}")
-        else:
-            st.write(f"⚠️ **{q}**  →  No page found — add URL manually below")
-
-st.divider()
+                _status = "🔴 Overdue"
+            _dash_rows.append({
+                "Client":        _o["org_name"],
+                "Last audit":    _o["last_run_date"][:10],
+                "Citation rate": f"{_rate}%",
+                "Status":        _status,
+            })
+        st.dataframe(pd.DataFrame(_dash_rows), use_container_width=True, hide_index=True)
+        st.caption("Use the client switcher in the sidebar to open any client's audit.")
 
 # ---------------------------------------------------------------------------
-# STEP 3 — REVIEW AND CONFIRM
+# URL INPUT + ANALYZE BUTTON
 # ---------------------------------------------------------------------------
-st.subheader("Step 3 — Review and confirm")
-st.write(
-    "Queries and matched pages appear below. "
-    "Edit any URL, add missing ones, or add extra queries manually."
-)
-st.code(
-    "affordable web design for restaurants | https://yourwebsite.com/services/web-design\n"
-    "SEO consulting for small businesses\n"
-    "social media management near me | https://yourwebsite.com/services/social-media",
-    language=None,
-)
+col_url, col_btn = st.columns([4, 1])
+with col_url:
+    homepage_url = st.text_input(
+        "Website URL",
+        placeholder="https://yourwebsite.com",
+        label_visibility="collapsed",
+    )
+with col_btn:
+    analyze_btn = st.button("🔍 Analyze my site", type="primary", use_container_width=True)
 
-queries_raw = st.text_area(
-    "Queries",
-    key="query_text",
-    height=200,
-    label_visibility="collapsed",
-)
+if not st.session_state.audit_table and not st.session_state.auto_extracted:
+    st.caption(
+        "Enter a client's website URL and click **Analyze** — "
+        "we'll extract their business context, discover real queries buyers use, "
+        "map every page, and check all three AI engines. Takes 2–4 minutes."
+    )
 
-run_btn = st.button("🚀 Run audit", type="primary")
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def parse_queries(raw: str):
-    items = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if "|" in line:
-            q, url = line.split("|", 1)
-            q   = q.strip()
-            url = url.strip()
-            # Normalise missing scheme so the scraper always receives a full URL.
-            if url and not url.startswith(("http://", "https://")):
-                url = f"https://{url}"
-            items.append((q, url))
-        else:
-            items.append((line, ""))
-    return items
-
+if st.session_state.auto_extracted:
+    ex = st.session_state.auto_extracted
+    st.caption(
+        f"**{ex.get('org_name', '')}** · {ex.get('services', '')} · "
+        f"Audience: {ex.get('audience', '')} · "
+        f"Domains: {', '.join(ex.get('domains', []))}"
+    )
+    if st.button("↺ Start over", help="Clear and analyze a different URL"):
+        for k in ("auto_extracted", "audit_table", "audit_done", "audit_results",
+                  "audit_synthesis", "recheck_results", "org_name", "domains_str"):
+            st.session_state.pop(k, None)
+        st.rerun()
 
 # ---------------------------------------------------------------------------
-# STEP 4 — RUN AND RESULTS
+# ANALYZE: auto-extract → parallel discover + crawl → Claude match
 # ---------------------------------------------------------------------------
-if run_btn:
-    queries = parse_queries(st.session_state.query_text)
-    if not queries:
-        st.warning("Add at least one query in Step 3.")
-        st.stop()
-    if not org_name.strip():
-        st.warning("Enter your organization name in the sidebar.")
-        st.stop()
-    if not target_domains:
-        st.warning("Add at least one domain in the sidebar.")
+if analyze_btn and homepage_url:
+    for k in ("auto_extracted", "audit_table", "audit_done", "audit_results",
+              "audit_synthesis", "recheck_results"):
+        st.session_state.pop(k, None)
+
+    url = homepage_url if homepage_url.startswith("http") else f"https://{homepage_url}"
+
+    with st.spinner("Reading your homepage..."):
+        extracted = crawler.auto_extract_business_info(url, _KEYS)
+
+    st.session_state.auto_extracted         = extracted
+    st.session_state["_pending_org_name"]   = extracted.get("org_name", "")
+    st.session_state["_pending_domains_str"] = ", ".join(extracted.get("domains", []))
+
+    org_name = extracted.get("org_name", "")
+    services = extracted.get("services", "")
+    audience = extracted.get("audience", "")
+
+    st.success(f"Found **{org_name}** — {services}. Discovering queries and mapping your site...")
+
+    def _run_discover():
+        return discover.discover_queries(
+            org_name=org_name,
+            services=services,
+            audience=audience,
+            location="",
+            keys=_KEYS,
+        )
+
+    def _run_crawl():
+        return crawler.build_page_map(url)
+
+    with st.spinner("Finding real queries + mapping your site in parallel (~30 sec)..."):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_d = pool.submit(_run_discover)
+            fut_c = pool.submit(_run_crawl)
+            discover_result = fut_d.result()
+            pages           = fut_c.result()
+
+    _STAGE_EMOJI = {"awareness": "🔍", "consideration": "⚖️", "evaluation": "🔬", "decision": "✅"}
+    _SKIP_KEYS   = {"error", "raw_count", "seeds_used", "_freq"}
+    all_queries_staged: list[tuple[str, str]] = []
+    for cat, qs in discover_result.items():
+        if cat not in _SKIP_KEYS and isinstance(qs, list):
+            for q in qs:
+                all_queries_staged.append((q, cat))
+    all_queries = [q for q, _ in all_queries_staged]
+    stage_map   = {q: cat for q, cat in all_queries_staged}
+    freq_map    = discover_result.get("_freq", {})
+
+    if not all_queries:
+        st.warning("No queries discovered — check your internet connection and try again.")
         st.stop()
 
-    results  = []
-    progress = st.progress(0.0, text="Starting...")
+    with st.spinner(f"Matching {len(all_queries)} queries to {len(pages)} pages..."):
+        matches = crawler.match_queries_to_pages(all_queries, pages, org_name, _KEYS)
 
-    for i, (query, page_url) in enumerate(queries):
-        progress.progress(i / len(queries), text=f"Checking: {query}")
-        result = radar.run_audit(query, page_url, target_domains, org_name, keys)
-        results.append(result)
-        time.sleep(0.3)
+    # Merge tracked queries (always included first) with new discoveries sorted by frequency
+    try:
+        tracked = db.get_tracked_queries(user["id"], org_name)
+    except Exception:
+        tracked = []
 
-    progress.progress(1.0, text="Running synthesis...")
-    synthesis = radar.synthesize_results(results, org_name, keys)
-    st.session_state.audit_results   = results
-    st.session_state.audit_synthesis = synthesis
-    st.session_state.audit_done      = True
-    db.save_run(org_name, results, synthesis if not synthesis.get("error") else None)
+    tracked_queries_set = {t["query"].lower() for t in tracked}
+    _merged_tracked = [
+        {"include": True, "query": t["query"],
+         "page_url": t.get("page_url") or matches.get(t["query"], ""),
+         "stage": "", "freq": 0}
+        for t in tracked
+    ]
+    _merged_new = sorted(
+        [
+            {"include": True, "query": q, "page_url": matches.get(q, ""),
+             "stage": f"{_STAGE_EMOJI.get(stage_map.get(q, ''), '')} {stage_map.get(q, '').capitalize()}".strip(),
+             "freq":  freq_map.get(q, 1)}
+            for q in all_queries
+            if q.lower() not in tracked_queries_set
+        ],
+        key=lambda x: -x["freq"],
+    )
+    merged = _merged_tracked + _merged_new
 
-if st.session_state.audit_done and st.session_state.audit_results:
-    results   = st.session_state.audit_results
-    synthesis = st.session_state.get("audit_synthesis", {})
+    st.session_state.audit_table   = merged if merged else [
+        {"include": True, "query": q, "page_url": matches.get(q, ""), "stage": "", "freq": 1}
+        for q in all_queries
+    ]
+    st.session_state.using_tracked = bool(tracked)
+    st.rerun()
+
+# ---------------------------------------------------------------------------
+# REVIEW TABLE — editable before running the audit
+# ---------------------------------------------------------------------------
+if st.session_state.audit_table and not st.session_state.audit_done:
+    org_name = st.session_state.get("org_name", "")
 
     st.divider()
-    st.subheader("Step 4 — Results")
+    st.subheader("Review queries and matched pages")
+    def _freq_label(n) -> str:
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return ""
+        if n >= 5: return "🔥🔥🔥"
+        if n >= 3: return "🔥🔥"
+        if n >= 1: return "🔥"
+        return ""
 
-    valid      = [r for r in results if r["perplexity_cited"] is not None
-                                     or r["chatgpt_cited"] is not None]
+    if st.session_state.get("using_tracked"):
+        n_tracked = len(st.session_state.audit_table)
+        st.info(
+            f"**{n_tracked} saved {'query' if n_tracked == 1 else 'queries'} loaded** "
+            "from your last audit — same queries, consistent tracking. "
+            "Edit URLs or add rows, then run.",
+            icon="🔁",
+        )
+    else:
+        st.caption(
+            "All queries selected — sorted by search frequency (🔥🔥🔥 = appeared across many search variations). "
+            "Verify matched pages, uncheck any to skip, then **Run audit**."
+        )
+
+    df = pd.DataFrame(st.session_state.audit_table)
+    if "stage" not in df.columns:
+        df["stage"] = ""
+    if "freq" not in df.columns:
+        df["freq"] = 0
+    df["freq"] = df["freq"].apply(_freq_label)
+    edited_df = st.data_editor(
+        df,
+        column_config={
+            "include":  st.column_config.CheckboxColumn("Run?",         default=True, width="small"),
+            "query":    st.column_config.TextColumn("Query",            width="large"),
+            "page_url": st.column_config.TextColumn("Matched page URL", width="large"),
+            "stage":    st.column_config.TextColumn("Stage",            width="medium"),
+            "freq":     st.column_config.TextColumn("Frequency",        width="small"),
+        },
+        disabled=["stage", "freq"],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="audit_table_editor",
+    )
+
+    n_selected = int(edited_df["include"].sum()) if "include" in edited_df.columns else len(edited_df)
+    run_col, info_col = st.columns([2, 5])
+    with run_col:
+        run_btn = st.button(
+            f"🚀 Run audit ({n_selected} quer{'y' if n_selected == 1 else 'ies'})",
+            type="primary",
+            disabled=n_selected == 0,
+        )
+    with info_col:
+        if not st.session_state.quick_mode:
+            st.caption(f"Confidence mode — 3 samples × {n_selected} queries × 3 engines = {n_selected * 9} citation checks.")
+        else:
+            st.caption(f"Quick check — 1 sample × {n_selected} queries × 3 engines = {n_selected * 3} checks.")
+
+    if run_btn:
+        target_domains = [
+            d.strip()
+            for d in st.session_state.get("domains_str", "").split(",")
+            if d.strip()
+        ]
+        if not org_name:
+            st.warning("Organization name is missing — it should be in the sidebar.")
+            st.stop()
+        if not target_domains:
+            st.warning("Add at least one domain in the sidebar (should be auto-filled).")
+            st.stop()
+
+        rows = edited_df[edited_df["include"] == True].to_dict("records")
+        if not rows:
+            st.warning("Select at least one query to audit.")
+            st.stop()
+
+        st.session_state.recheck_results = {}
+        results  = []
+        progress = st.progress(0.0, text="Starting...")
+
+        for i, row in enumerate(rows):
+            q        = str(row.get("query", "")).strip()
+            page_url = str(row.get("page_url", "")).strip()
+            if not q:
+                continue
+            label = f"({i+1}/{len(rows)}) {q}"
+            if not st.session_state.quick_mode:
+                label += " · 3× confidence"
+            progress.progress(i / len(rows), text=label)
+            results.append(radar.run_audit(q, page_url, target_domains, org_name, _KEYS, n_samples))
+            results[-1]["stage"] = row.get("stage", "")
+            time.sleep(0.2)
+
+        progress.progress(1.0, text="Running synthesis...")
+        synthesis = radar.synthesize_results(results, org_name, _KEYS)
+
+        st.session_state.audit_results   = results
+        st.session_state.audit_synthesis = synthesis
+        st.session_state.audit_done      = True
+
+        try:
+            db.save_run(org_name, results,
+                        synthesis if not synthesis.get("error") else None,
+                        user_id=user.get("id"))
+        except Exception:
+            pass
+
+        try:
+            db.upsert_tracked_queries(user.get("id"), org_name, rows)
+        except Exception:
+            pass
+
+        st.session_state.using_tracked = False
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# RESULTS
+# ---------------------------------------------------------------------------
+def _show_recheck_panel(before: dict, after: dict) -> None:
+    score_b = before.get("readiness_score") or 0
+    score_a = after.get("readiness_score")  or 0
+    delta   = score_a - score_b
+    st.markdown("---")
+    st.markdown("**Fix check results**")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Readiness", f"{score_a}/100", delta=f"{delta:+d} pts",
+              delta_color="normal" if delta >= 0 else "inverse")
+
+    def _em(col, label, b, a):
+        col.metric(label,
+                   "✅" if a else ("❌" if a is False else "—"),
+                   delta="↑ improved" if (not b) and a else None,
+                   delta_color="normal" if (not b) and a else "off")
+
+    _em(c2, "Perplexity", before.get("perplexity_cited"), after.get("perplexity_cited"))
+    _em(c3, "ChatGPT",    before.get("chatgpt_cited"),    after.get("chatgpt_cited"))
+    _em(c4, "Google AI",  before.get("google_cited"),     after.get("google_cited"))
+
+    improved = any([
+        (not before.get("perplexity_cited")) and after.get("perplexity_cited"),
+        (not before.get("chatgpt_cited"))    and after.get("chatgpt_cited"),
+        (before.get("google_cited") is False) and after.get("google_cited"),
+    ])
+    if improved:
+        st.success("Fix confirmed — at least one engine now cites you for this query.")
+    else:
+        st.info(
+            "Not yet cited. Re-index times: ChatGPT hours, Google AI 1–2 days, Perplexity 2–7 days. "
+            "Try re-checking tomorrow."
+        )
+
+
+if st.session_state.audit_done and st.session_state.audit_results:
+    results        = st.session_state.audit_results
+    synthesis      = st.session_state.audit_synthesis
+    org_name       = st.session_state.get("org_name", "")
+    target_domains = [
+        d.strip()
+        for d in st.session_state.get("domains_str", "").split(",")
+        if d.strip()
+    ]
+
+    st.divider()
+    st.subheader("Results")
+
+    # Detect systemic engine failures (>50% of queries returned None for an engine)
+    n_total = len(results)
+    if n_total:
+        perp_fail = sum(1 for r in results if r.get("perplexity_cited") is None and not r.get("error"))
+        gpt_fail  = sum(1 for r in results if r.get("chatgpt_cited")    is None and not r.get("error"))
+        goog_fail = sum(
+            1 for r in results
+            if r.get("google_cited") is None
+            and r.get("google_error")
+            and "No Google API key" not in (r.get("google_error") or "")
+        )
+        failed_engines = []
+        if perp_fail > n_total * 0.5:
+            failed_engines.append("Perplexity")
+        if gpt_fail > n_total * 0.5:
+            failed_engines.append("ChatGPT")
+        if goog_fail > n_total * 0.5:
+            failed_engines.append("Google AI")
+        if failed_engines:
+            st.warning(
+                f"**{', '.join(failed_engines)} returned errors on most queries** — "
+                "the engine(s) may be experiencing issues. Results shown are partial. "
+                "Wait a few minutes and re-run the audit to get complete data.",
+                icon="⚠️",
+            )
+
+    valid      = [r for r in results if r.get("perplexity_cited") is not None or r.get("chatgpt_cited") is not None]
     total      = len(valid)
-    perp_cited = sum(1 for r in valid if r["perplexity_cited"])
-    gpt_cited  = sum(1 for r in valid if r["chatgpt_cited"])
+    perp_cited = sum(1 for r in valid if r.get("perplexity_cited"))
+    gpt_cited  = sum(1 for r in valid if r.get("chatgpt_cited"))
     goog_cited = sum(1 for r in valid if r.get("google_cited"))
     all_cited  = sum(1 for r in valid if r.get("perplexity_cited") and r.get("chatgpt_cited") and r.get("google_cited"))
 
@@ -670,20 +867,45 @@ if st.session_state.audit_done and st.session_state.audit_results:
     m4.metric("Cited on Google AI",  f"{goog_cited}/{total}")
     m5.metric("Cited on all 3",      f"{all_cited}/{total}")
 
-    table_rows = []
-    for r in results:
-        table_rows.append({
-            "Query":      r["query"],
-            "Perplexity": citation_badge(r["perplexity_cited"]),
-            "ChatGPT":    citation_badge(r["chatgpt_cited"]),
-            "Google AI":  google_badge(r),
-            "Readiness":  r["readiness_score"] if r["readiness_score"] is not None else "—",
-            "Verdict":    r["verdict"] if not r["error"] else f"⚠️ {r['error']}",
-        })
+    # Buying-stage × engine citation matrix
+    _STAGE_ORDER   = ["🔍 Awareness", "⚖️ Consideration", "🔬 Evaluation", "✅ Decision"]
+    _stage_buckets: dict[str, dict] = {}
+    for _r in results:
+        _s = (_r.get("stage") or "").strip() or None
+        if not _s:
+            continue
+        if _s not in _stage_buckets:
+            _stage_buckets[_s] = {"perp": 0, "gpt": 0, "goog": 0, "total": 0}
+        _stage_buckets[_s]["total"] += 1
+        if _r.get("perplexity_cited"): _stage_buckets[_s]["perp"] += 1
+        if _r.get("chatgpt_cited"):    _stage_buckets[_s]["gpt"]  += 1
+        if _r.get("google_cited"):     _stage_buckets[_s]["goog"] += 1
 
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    _matrix_rows = []
+    for _s in _STAGE_ORDER:
+        if _s in _stage_buckets:
+            _d = _stage_buckets[_s]
+            _t = _d["total"]
+            _matrix_rows.append({
+                "Stage":      _s,
+                "Perplexity": f"{_d['perp']}/{_t}",
+                "ChatGPT":    f"{_d['gpt']}/{_t}",
+                "Google AI":  f"{_d['goog']}/{_t}",
+            })
+    if _matrix_rows:
+        st.markdown("**Coverage by buying stage**")
+        st.dataframe(pd.DataFrame(_matrix_rows), use_container_width=True, hide_index=True)
 
-    # Synthesis panel
+    st.dataframe(pd.DataFrame([{
+        "Stage":      r.get("stage", ""),
+        "Query":      r["query"],
+        "Perplexity": citation_badge(r, "perplexity"),
+        "ChatGPT":    citation_badge(r, "chatgpt"),
+        "Google AI":  google_badge(r),
+        "Readiness":  r.get("readiness_score") if r.get("readiness_score") is not None else "—",
+        "Verdict":    r.get("verdict") if not r.get("error") else f"⚠️ {r['error']}",
+    } for r in results]), use_container_width=True, hide_index=True)
+
     if synthesis and not synthesis.get("error"):
         st.divider()
         st.markdown("### Strategic diagnosis")
@@ -691,67 +913,62 @@ if st.session_state.audit_done and st.session_state.audit_results:
         col_rc, col_pf = st.columns(2)
         with col_rc:
             st.markdown("**Root causes**")
-            for cause in synthesis.get("root_causes", []):
-                st.markdown(f"- {cause}")
+            for c in synthesis.get("root_causes", []):
+                st.markdown(f"- {c}")
         with col_pf:
-            st.markdown("**Priority fixes (highest impact first)**")
-            for i, fix in enumerate(synthesis.get("priority_fixes", []), 1):
-                st.markdown(f"{i}. {fix}")
+            st.markdown("**Priority fixes**")
+            for i, f in enumerate(synthesis.get("priority_fixes", []), 1):
+                st.markdown(f"{i}. {f}")
 
-    needs_fixes = [
-        r for r in results
-        if not r["error"] and (
-            not r["perplexity_cited"]
-            or not r["chatgpt_cited"]
-            or r.get("google_cited") is False
-        )
-    ]
+    needs_fixes = [r for r in results if not r.get("error") and (
+        not r.get("perplexity_cited") or not r.get("chatgpt_cited") or r.get("google_cited") is False
+    )]
 
     if needs_fixes:
         st.markdown("### Fixes")
-        for r in needs_fixes:
-            score = f"  ·  readiness {r['readiness_score']}/100" if r["readiness_score"] else ""
-            google_part = f"   Google AI {google_badge(r)}" if r.get("google_cited") is not None or r.get("google_error") else ""
+        for i, r in enumerate(needs_fixes):
+            score_part  = f"  ·  readiness {r['readiness_score']}/100" if r.get("readiness_score") else ""
+            google_part = (f"   Google AI {google_badge(r)}"
+                           if r.get("google_cited") is not None or r.get("google_error") else "")
             label = (
                 f"{r['query']}   |   "
-                f"Perplexity {citation_badge(r['perplexity_cited'])}   "
-                f"ChatGPT {citation_badge(r['chatgpt_cited'])}"
-                f"{google_part}{score}"
+                f"Perplexity {citation_badge(r, 'perplexity')}   "
+                f"ChatGPT {citation_badge(r, 'chatgpt')}"
+                f"{google_part}{score_part}"
             )
+            recheck_key = f"rc_{i}"
+
             with st.expander(label):
-                col_p, col_g, col_gg = st.columns(3)
-                with col_p:
+                cp, cg, cgg = st.columns(3)
+                with cp:
                     st.markdown("**Perplexity**")
-                    if r["perplexity_matched_url"]:
+                    if r.get("perplexity_matched_url"):
                         st.success(f"Cited: {r['perplexity_matched_url']}")
-                    elif r["perplexity_citations"]:
+                    elif r.get("perplexity_citations"):
                         st.error("Not citing you. Currently citing:")
                         for c in r["perplexity_citations"][:4]:
                             st.write(f"- {c}")
                     else:
                         st.warning("No citations returned.")
 
-                with col_g:
+                with cg:
                     st.markdown("**ChatGPT**")
-                    if r["chatgpt_matched_url"]:
+                    if r.get("chatgpt_matched_url"):
                         st.success(f"Cited: {r['chatgpt_matched_url']}")
-                    elif r["chatgpt_citations"]:
+                    elif r.get("chatgpt_citations"):
                         st.error("Not citing you. Currently citing:")
                         for c in r["chatgpt_citations"][:4]:
                             st.write(f"- {c}")
                     else:
                         st.warning("No citations returned.")
 
-                with col_gg:
+                with cgg:
                     st.markdown("**Google AI**")
                     if r.get("google_matched_url"):
                         st.success(f"Cited: {r['google_matched_url']}")
                     elif r.get("google_cited") is None:
-                        google_err = r.get("google_error", "")
-                        if google_err:
-                            st.error(f"Error: {google_err}")
-                        else:
-                            st.caption("No Google key provided.")
+                        err = r.get("google_error", "")
+                        st.error(f"Error: {err}") if err else st.caption("Google key not configured.")
                     elif r.get("google_citations"):
                         st.error("Not citing you. Currently citing:")
                         for c in r["google_citations"][:4]:
@@ -760,81 +977,151 @@ if st.session_state.audit_done and st.session_state.audit_results:
                         st.warning("No citations returned.")
 
                 st.divider()
-
-                if r["gaps"]:
+                if r.get("gaps"):
                     st.markdown("**What is missing on the page**")
                     for g in r["gaps"]:
                         st.write(f"- {g}")
-
-                if r["rewritten_section"]:
+                if r.get("rewritten_section"):
                     st.markdown("**Answer-first rewrite**")
                     st.info(r["rewritten_section"])
-
-                if r["suggested_headings"]:
+                if r.get("suggested_headings"):
                     st.markdown("**Suggested question-phrased headings**")
                     for h in r["suggested_headings"]:
                         st.write(f"- {h}")
-
-                if r["faq_schema"]:
-                    st.markdown("**FAQ schema — paste into the page's `<head>`**")
+                if r.get("faq_schema"):
+                    st.markdown("**FAQ schema — paste into `<head>`**")
                     st.warning(
-                        "⚠️ Before pasting this code live: make sure every question and "
-                        "answer in the schema is also visible on the actual page. "
-                        "Google requires the schema to match what users can see. "
-                        "If any answer says [ORG TO CONFIRM], fill it in on the page first, "
-                        "then update the schema to match."
+                        "Before pasting live: every schema question/answer must also be "
+                        "visible on the page. Fill in [ORG TO CONFIRM] placeholders first."
                     )
                     st.code(r["faq_schema"], language="html")
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
+                st.divider()
+                st.markdown("**Citation history for this query**")
+                try:
+                    q_history = db.get_query_citation_history(
+                        user.get("id"), org_name, r["query"], limit=12
+                    )
+                    if q_history:
+                        hist_rows = []
+                        for h in q_history:
+                            hist_rows.append({
+                                "Date":       h["created_at"][:10],
+                                "Perplexity": "✅" if h.get("perplexity_cited") else ("❌" if h.get("perplexity_cited") is False else "—"),
+                                "ChatGPT":    "✅" if h.get("chatgpt_cited")    else ("❌" if h.get("chatgpt_cited")    is False else "—"),
+                                "Google AI":  "✅" if h.get("google_cited")     else ("❌" if h.get("google_cited")     is False else "—"),
+                                "Readiness":  h.get("readiness_score") if h.get("readiness_score") is not None else "—",
+                            })
+                        st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+                        st.caption(f"Last {len(hist_rows)} audit runs — oldest first.")
+                    else:
+                        st.caption("History will appear here after your next audit.")
+                except Exception:
+                    st.caption("History unavailable.")
+
+                st.divider()
+                st.markdown("**Applied the fix? Re-check this page.**")
+                st.caption("After publishing your changes, click below to see if citations improved.")
+                if st.button("🔄 Re-check after fix", key=f"btn_{recheck_key}"):
+                    with st.spinner(f"Re-checking '{r['query']}'..."):
+                        new_result = radar.recheck_single(
+                            r["query"], r.get("page_url", ""),
+                            target_domains, org_name, _KEYS, n_samples,
+                        )
+                    st.session_state.recheck_results[recheck_key] = {
+                        "before": dict(r), "after": new_result,
+                    }
+                    qr_id = r.get("query_result_id")
+                    if qr_id:
+                        try:
+                            db.save_fix_attempt(qr_id, dict(r), new_result)
+                        except Exception:
+                            pass
+
+                if recheck_key in st.session_state.recheck_results:
+                    rc = st.session_state.recheck_results[recheck_key]
+                    _show_recheck_panel(rc["before"], rc["after"])
+
+    # ── Downloads ─────────────────────────────────────────────────────────
+    st.divider()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
     writer.writerow([
-        "Query", "Perplexity Cited", "Perplexity Matched URL",
-        "ChatGPT Cited", "ChatGPT Matched URL",
-        "Readiness", "Verdict", "Gaps",
+        "Query", "Perplexity", "Perplexity URL", "ChatGPT", "ChatGPT URL",
+        "Google AI", "Google AI URL", "Readiness", "Verdict", "Gaps",
         "Rewritten Section", "Suggested Headings",
-        "Perplexity Citations", "ChatGPT Citations",
     ])
     for r in results:
         writer.writerow([
             r["query"],
-            r["perplexity_cited"],    r["perplexity_matched_url"],
-            r["chatgpt_cited"],       r["chatgpt_matched_url"],
-            r["readiness_score"],     r["verdict"],
+            r.get("perplexity_cited"), r.get("perplexity_matched_url"),
+            r.get("chatgpt_cited"),    r.get("chatgpt_matched_url"),
+            r.get("google_cited"),     r.get("google_matched_url"),
+            r.get("readiness_score"),  r.get("verdict"),
             " | ".join(r.get("gaps") or []),
             r.get("rewritten_section") or "",
             " | ".join(r.get("suggested_headings") or []),
-            " | ".join(r.get("perplexity_citations") or []),
-            " | ".join(r.get("chatgpt_citations") or []),
         ])
 
-    st.download_button(
-        "⬇️ Download full results as CSV",
-        data=buffer.getvalue(),
-        file_name="geo_radar_results.csv",
-        mime="text/csv",
-    )
+    slug = (org_name or "audit").lower().replace(" ", "_")
+    dl_csv, dl_pdf = st.columns(2)
+    with dl_csv:
+        st.download_button(
+            "⬇️ Download CSV",
+            data=buf.getvalue(),
+            file_name=f"geo_radar_{slug}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with dl_pdf:
+        try:
+            pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by)
+            st.download_button(
+                "⬇️ Download PDF report",
+                data=pdf_bytes,
+                file_name=f"geo_radar_{slug}_report.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.caption(f"PDF error: {e}")
 
 # ---------------------------------------------------------------------------
-# HISTORY — past runs for this org
+# CITATION RATE HISTORY — trend chart + table
 # ---------------------------------------------------------------------------
 st.divider()
-with st.expander("📈 Citation history for this organization"):
-    try:
-        history = db.get_history(org_name)
-    except Exception:
-        st.warning("Could not load history from database.")
-        history = []
-    if not history:
-        st.info("No past runs found. Run an audit to start tracking citation rates over time.")
+org_name_for_history = st.session_state.get("org_name", "")
+
+with st.expander(
+    "📈 Citation rate over time"
+    + (f" — {org_name_for_history}" if org_name_for_history else "")
+):
+    if not org_name_for_history:
+        st.info("Run an audit to start tracking citation rates over time.")
     else:
-        history_rows = []
-        for row in history:
-            rate = round(row["cited_count"] / row["query_count"] * 100) if row["query_count"] else 0
-            history_rows.append({
-                "Date":          row["created_at"][:10],
-                "Queries":       row["query_count"],
-                "Cited":         row["cited_count"],
-                "Citation rate": f"{rate}%",
-            })
-        st.dataframe(pd.DataFrame(history_rows), use_container_width=True, hide_index=True)
+        try:
+            history = db.get_history(org_name_for_history, limit=20, user_id=user.get("id"))
+        except Exception:
+            history = []
+
+        if not history:
+            st.info("No past runs for this org yet.")
+        else:
+            chart_rows = []
+            for row in reversed(history):  # oldest first
+                rate = round(row["cited_count"] / row["query_count"] * 100) if row["query_count"] else 0
+                chart_rows.append({"Date": row["created_at"][:10], "Citation rate %": rate})
+
+            chart_df = pd.DataFrame(chart_rows).set_index("Date")
+            st.line_chart(chart_df, use_container_width=True)
+
+            table_rows = []
+            for row in history:
+                rate = round(row["cited_count"] / row["query_count"] * 100) if row["query_count"] else 0
+                table_rows.append({
+                    "Date":          row["created_at"][:10],
+                    "Queries":       row["query_count"],
+                    "Cited":         row["cited_count"],
+                    "Citation rate": f"{rate}%",
+                })
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
