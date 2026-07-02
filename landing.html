@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEO Radar — Own AI Search Before Your Competitor Does</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #050508;
+  --surface: #0f0f14;
+  --surface2: #13131a;
+  --border: #1e1e2e;
+  --border2: #2a2a3d;
+  --primary: #6366f1;
+  --primary-light: #818cf8;
+  --cyan: #06b6d4;
+  --green: #10b981;
+  --red: #f43f5e;
+  --amber: #f59e0b;
+  --text: #f8fafc;
+  --text2: #94a3b8;
+  --text3: #475569;
+  --glow-x: 50%;
+  --glow-y: 50%;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+  line-height: 1.6;
+}
+
+/* ── UTILITIES ─────────────────────────────────────────── */
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+.gradient-text {
+  background: linear-gradient(135deg, #fff 0%, var(--primary-light) 50%, var(--cyan) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--primary-light);
+  background: rgba(99,102,241,0.1);
+  border: 1px solid rgba(99,102,241,0.25);
+  padding: 6px 14px; border-radius: 100px;
+  margin-bottom: 24px;
+}
+.tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); display: inline-block; }
+
+/* ── REVEAL ON SCROLL ──────────────────────────────────── */
+.reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-delay-1 { transition-delay: 0.1s; }
+.reveal-delay-2 { transition-delay: 0.2s; }
+.reveal-delay-3 { transition-delay: 0.3s; }
+.reveal-delay-4 { transition-delay: 0.4s; }
+.reveal-delay-5 { transition-delay: 0.5s; }
+
+/* ── NAV ───────────────────────────────────────────────── */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 16px 0;
+  transition: background 0.3s, border-color 0.3s, backdrop-filter 0.3s;
+  border-bottom: 1px solid transparent;
+}
+nav.scrolled {
+  background: rgba(5,5,8,0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom-color: var(--border);
+}
+.nav-inner {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.nav-logo {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 18px; font-weight: 700; color: var(--text);
+  text-decoration: none;
+}
+.nav-logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--primary), var(--cyan));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+.nav-links {
+  display: flex; gap: 36px; list-style: none;
+}
+.nav-links a {
+  color: var(--text2); font-size: 14px; font-weight: 500;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--text); }
+.nav-ctas { display: flex; gap: 12px; align-items: center; }
+.btn-ghost {
+  padding: 9px 20px; border-radius: 8px;
+  border: 1px solid var(--border2); background: transparent;
+  color: var(--text2); font-size: 14px; font-weight: 500;
+  cursor: pointer; text-decoration: none;
+  transition: border-color 0.2s, color 0.2s;
+}
+.btn-ghost:hover { border-color: var(--primary); color: var(--text); }
+.btn-primary {
+  padding: 9px 20px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; text-decoration: none; border: none;
+  position: relative; overflow: hidden;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+.btn-primary::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%);
+  transform: translateX(-100%);
+  transition: transform 0.5s;
+}
+.btn-primary:hover::after { transform: translateX(100%); }
+
+/* ── HERO ──────────────────────────────────────────────── */
+.hero {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center;
+  padding: 120px 24px 80px;
+  position: relative; overflow: hidden;
+}
+#particle-canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+.hero-glow {
+  position: absolute;
+  width: 800px; height: 800px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99,102,241,0.18) 0%, rgba(6,182,212,0.08) 40%, transparent 70%);
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: left 0.15s ease-out, top 0.15s ease-out;
+}
+.hero-content { position: relative; z-index: 2; max-width: 900px; }
+.hero h1 {
+  font-size: clamp(48px, 7vw, 80px);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  margin-bottom: 24px;
+}
+.hero h1 span { display: block; }
+.hero h1 .line2 {
+  background: linear-gradient(90deg, var(--primary-light), var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-sub {
+  font-size: clamp(16px, 2vw, 20px);
+  color: var(--text2);
+  max-width: 600px; margin: 0 auto 40px;
+  font-weight: 400; line-height: 1.7;
+}
+.hero-ctas { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 80px; }
+.btn-hero {
+  padding: 15px 32px; border-radius: 12px;
+  font-size: 16px; font-weight: 600;
+  cursor: pointer; text-decoration: none;
+  transition: all 0.2s;
+}
+.btn-hero-primary {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--cyan) 100%);
+  background-size: 200% 200%;
+  color: #fff; border: none;
+  animation: gradientShift 3s ease infinite;
+  box-shadow: 0 0 40px rgba(99,102,241,0.4);
+}
+.btn-hero-primary:hover {
+  box-shadow: 0 0 60px rgba(99,102,241,0.6);
+  transform: translateY(-2px);
+}
+.btn-hero-ghost {
+  background: rgba(255,255,255,0.05);
+  color: var(--text2); border: 1px solid var(--border2);
+}
+.btn-hero-ghost:hover { background: rgba(255,255,255,0.08); color: var(--text); border-color: var(--primary); }
+
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── DASHBOARD MOCKUP ──────────────────────────────────── */
+.dashboard-wrapper {
+  perspective: 1200px;
+  position: relative; z-index: 2;
+  width: 100%; max-width: 900px; margin: 0 auto;
+}
+.dashboard-card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 40px 120px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05);
+  transform-style: preserve-3d;
+  animation: float 6s ease-in-out infinite;
+  transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-12px); }
+}
+.db-titlebar {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex; align-items: center; gap: 12px;
+}
+.db-dots { display: flex; gap: 7px; }
+.db-dot { width: 12px; height: 12px; border-radius: 50%; }
+.db-dot.r { background: #ff5f56; }
+.db-dot.y { background: #ffbd2e; }
+.db-dot.g { background: #27c93f; }
+.db-title { font-size: 13px; font-weight: 500; color: var(--text2); margin-left: 8px; }
+.db-run-btn {
+  margin-left: auto;
+  padding: 5px 14px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--primary), var(--cyan));
+  color: #fff; font-size: 12px; font-weight: 600; border: none;
+  cursor: pointer;
+}
+.db-metrics {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+.db-metric {
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+  text-align: left;
+}
+.db-metric:last-child { border-right: none; }
+.db-metric-label { font-size: 10px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+.db-metric-value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+.db-metric-value.good { color: var(--green); }
+.db-results-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.db-results-table thead tr { background: var(--surface2); }
+.db-results-table th {
+  padding: 9px 14px; text-align: left;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text3); border-bottom: 1px solid var(--border);
+}
+.db-results-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(30,30,46,0.6);
+  color: var(--text2); vertical-align: middle;
+}
+.db-results-table tr:hover td { background: rgba(99,102,241,0.04); }
+.db-results-table .query-cell { color: var(--text); font-weight: 500; max-width: 220px; }
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
+  white-space: nowrap;
+}
+.badge.cited    { background: rgba(16,185,129,0.15); color: var(--green); }
+.badge.no-cited { background: rgba(244,63,94,0.12);  color: var(--red); }
+.badge.error    { background: rgba(245,158,11,0.12); color: var(--amber); }
+.score-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.score-bar { width: 48px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.score-bar-fill { height: 100%; border-radius: 2px; }
+.fill-low  { background: var(--red); }
+.fill-mid  { background: var(--amber); }
+.fill-high { background: var(--green); }
+.verdict-text { color: var(--text3); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-diagnosis {
+  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+  background: rgba(99,102,241,0.04);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.db-diag-section h4 { font-size: 11px; font-weight: 600; color: var(--primary-light); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+.db-diag-item { font-size: 11px; color: var(--text2); display: flex; gap: 6px; margin-bottom: 5px; }
+.db-diag-item::before { content: '→'; color: var(--primary); flex-shrink: 0; }
+
+/* ── SOCIAL PROOF BAR ──────────────────────────────────── */
+.social-proof {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 28px 0;
+  background: var(--surface);
+}
+.social-inner {
+  display: flex; align-items: center; justify-content: center;
+  gap: 40px; flex-wrap: wrap;
+}
+.platform-badge {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 14px; font-weight: 600; color: var(--text2);
+}
+.platform-dot { width: 8px; height: 8px; border-radius: 50%; }
+.platform-dot.perp  { background: #a855f7; box-shadow: 0 0 8px #a855f7; }
+.platform-dot.openai { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.platform-dot.google { background: #3b82f6; box-shadow: 0 0 8px #3b82f6; }
+.proof-divider { width: 1px; height: 32px; background: var(--border); }
+.stat-item { text-align: center; }
+.stat-num { font-size: 22px; font-weight: 800; color: var(--text); }
+.stat-label { font-size: 12px; color: var(--text3); margin-top: 2px; }
+
+/* ── SECTIONS ──────────────────────────────────────────── */
+section { padding: 120px 0; }
+.section-tag { text-align: center; }
+.section-headline {
+  font-size: clamp(36px, 5vw, 54px);
+  font-weight: 800; line-height: 1.1;
+  letter-spacing: -0.025em; text-align: center;
+  margin-bottom: 20px;
+}
+.section-sub {
+  font-size: 18px; color: var(--text2);
+  text-align: center; max-width: 560px;
+  margin: 0 auto 64px; line-height: 1.7;
+}
+
+/* ── PROBLEM SECTION ───────────────────────────────────── */
+.problem { background: var(--bg); }
+.stat-cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  margin-bottom: 64px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--primary);
+  border-radius: 16px;
+  padding: 32px 28px;
+  transition: border-top-color 0.3s, transform 0.3s;
+}
+.stat-card:hover { border-top-color: var(--cyan); transform: translateY(-4px); }
+.stat-card-num {
+  font-size: 48px; font-weight: 900;
+  background: linear-gradient(135deg, var(--text), var(--primary-light));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  line-height: 1; margin-bottom: 12px;
+}
+.stat-card p { font-size: 15px; color: var(--text2); line-height: 1.6; }
+
+/* COMPARISON */
+.comparison {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+  max-width: 800px; margin: 0 auto;
+}
+.compare-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 28px; position: relative; overflow: hidden;
+}
+.compare-box.old::before {
+  content: 'OLD SEARCH';
+  position: absolute; top: 12px; right: 14px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+  color: var(--text3);
+}
+.compare-box.new-search::before {
+  content: 'AI SEARCH';
+  position: absolute; top: 12px; right: 14px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+  color: var(--cyan);
+}
+.compare-title { font-size: 13px; font-weight: 600; color: var(--text3); margin-bottom: 16px; }
+.search-result {
+  display: flex; gap: 10px; margin-bottom: 12px;
+  padding: 10px 12px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.search-result.highlighted { border-color: var(--primary); background: rgba(99,102,241,0.08); }
+.result-num { font-size: 11px; font-weight: 700; color: var(--text3); padding-top: 2px; min-width: 14px; }
+.result-body { flex: 1; }
+.result-url { font-size: 10px; color: var(--green); margin-bottom: 2px; }
+.result-title { font-size: 12px; color: var(--text); font-weight: 500; }
+.result-snippet { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.ai-answer-box {
+  background: rgba(99,102,241,0.06);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 10px; padding: 14px;
+  margin-bottom: 12px;
+}
+.ai-answer-label { font-size: 10px; font-weight: 700; color: var(--primary-light); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+.ai-answer-text { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 10px; }
+.ai-citations { display: flex; gap: 6px; flex-wrap: wrap; }
+.ai-citation { font-size: 10px; color: var(--text3); background: var(--surface); border: 1px solid var(--border); padding: 3px 8px; border-radius: 4px; }
+.ai-citation.you { color: var(--red); border-color: rgba(244,63,94,0.3); background: rgba(244,63,94,0.05); }
+.you-invisible { font-size: 11px; color: var(--red); text-align: center; margin-top: 8px; font-weight: 600; }
+
+/* ── HOW IT WORKS ──────────────────────────────────────── */
+.how { background: var(--surface); }
+.steps {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  position: relative; margin-top: 16px;
+}
+.steps::before {
+  content: '';
+  position: absolute; top: 32px; left: calc(12.5% + 16px); right: calc(12.5% + 16px);
+  height: 1px;
+  background: linear-gradient(90deg, var(--primary), var(--cyan));
+  z-index: 0;
+}
+.step {
+  padding: 0 24px; text-align: center; position: relative; z-index: 1;
+}
+.step-num {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px;
+  font-size: 22px; font-weight: 800;
+  box-shadow: 0 0 30px rgba(99,102,241,0.4);
+}
+.step h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+.step p { font-size: 14px; color: var(--text2); line-height: 1.6; }
+
+/* ── FULL DASHBOARD PREVIEW ────────────────────────────── */
+.dashboard-preview-section {
+  background: var(--bg);
+  overflow: hidden;
+}
+.full-dashboard {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 60px 160px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.04);
+  margin-top: 60px;
+}
+.fd-header {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px;
+  display: flex; align-items: center; gap: 14px;
+}
+.fd-dots { display: flex; gap: 7px; }
+.fd-dot { width: 13px; height: 13px; border-radius: 50%; }
+.fd-dot.r { background: #ff5f57; } .fd-dot.y { background: #febc2e; } .fd-dot.g { background: #28c840; }
+.fd-org { margin-left: 12px; font-size: 13px; font-weight: 600; color: var(--text2); }
+.fd-domain { font-size: 12px; color: var(--text3); margin-left: 8px; }
+.fd-run { margin-left: auto; padding: 6px 16px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--cyan)); color: #fff; font-size: 12px; font-weight: 600; border: none; cursor: pointer; }
+.fd-body { display: grid; grid-template-columns: 1fr 300px; }
+.fd-main { border-right: 1px solid var(--border); }
+.fd-metrics-row {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+.fd-metric { padding: 14px 16px; border-right: 1px solid var(--border); }
+.fd-metric:last-child { border-right: none; }
+.fd-metric-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+.fd-metric-val { font-size: 20px; font-weight: 800; margin-top: 4px; }
+.fd-metric-val.g { color: var(--green); } .fd-metric-val.b { color: var(--cyan); }
+.fd-table { width: 100%; border-collapse: collapse; }
+.fd-table th { padding: 10px 16px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); background: var(--surface2); border-bottom: 1px solid var(--border); }
+.fd-table td { padding: 10px 16px; border-bottom: 1px solid rgba(30,30,46,0.5); font-size: 12px; color: var(--text2); }
+.fd-table tr:hover td { background: rgba(99,102,241,0.03); }
+.fd-query { color: var(--text) !important; font-weight: 500; max-width: 200px; }
+.fd-side { padding: 20px; }
+.fd-side-title { font-size: 12px; font-weight: 700; color: var(--primary-light); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
+.fd-cause { font-size: 11px; color: var(--text2); margin-bottom: 8px; display: flex; gap: 6px; }
+.fd-cause::before { content: '→'; color: var(--primary); flex-shrink: 0; }
+.fd-fix { font-size: 11px; color: var(--text2); margin-bottom: 8px; display: flex; gap: 8px; }
+.fd-fix-num { color: var(--cyan); font-weight: 700; flex-shrink: 0; }
+.fd-divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.fd-bottom { border-top: 1px solid var(--border); padding: 0; }
+.fd-expander-header {
+  padding: 12px 16px; font-size: 12px; font-weight: 500; color: var(--text2);
+  background: rgba(99,102,241,0.05); display: flex; align-items: center; gap: 8px;
+  border-left: 3px solid var(--primary);
+}
+.fd-expander-header span { font-size: 11px; }
+.fd-expand-body {
+  padding: 14px 16px;
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;
+  background: var(--surface2); border-top: 1px solid var(--border);
+}
+.fd-col-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+.fd-col-title.p { color: #a855f7; } .fd-col-title.o { color: var(--green); } .fd-col-title.g { color: #3b82f6; }
+.fd-not-citing { font-size: 10px; color: var(--red); margin-bottom: 6px; font-weight: 500; }
+.fd-cite-url { font-size: 10px; color: var(--text3); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-cite-url::before { content: '• '; color: var(--text3); }
+
+/* ── CAPABILITIES ──────────────────────────────────────── */
+.capabilities { background: var(--bg); }
+.cap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.cap-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 28px;
+  position: relative; overflow: hidden;
+  cursor: default;
+  transition: border-color 0.3s, box-shadow 0.3s;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.cap-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  opacity: 0; transition: opacity 0.3s;
+}
+.cap-card:hover { border-color: var(--primary); box-shadow: 0 20px 60px rgba(99,102,241,0.15); }
+.cap-card:hover::before { opacity: 1; }
+.cap-icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(6,182,212,0.1));
+  border: 1px solid rgba(99,102,241,0.25);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; margin-bottom: 20px;
+}
+.cap-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+.cap-card p { font-size: 14px; color: var(--text2); line-height: 1.65; }
+.cap-tag {
+  display: inline-block; margin-top: 16px;
+  font-size: 11px; font-weight: 600; color: var(--cyan);
+  background: rgba(6,182,212,0.1); border: 1px solid rgba(6,182,212,0.2);
+  padding: 3px 10px; border-radius: 4px;
+}
+
+/* ── PLATFORMS ─────────────────────────────────────────── */
+.platforms { background: var(--surface); }
+.platform-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.platform-card {
+  border-radius: 20px;
+  padding: 40px 32px;
+  border: 1px solid var(--border);
+  position: relative; overflow: hidden;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.platform-card:hover { transform: translateY(-6px); }
+.platform-card.perp-card { background: linear-gradient(145deg, rgba(168,85,247,0.12), var(--surface)); border-color: rgba(168,85,247,0.3); }
+.platform-card.perp-card:hover { box-shadow: 0 20px 60px rgba(168,85,247,0.2); }
+.platform-card.openai-card { background: linear-gradient(145deg, rgba(16,185,129,0.1), var(--surface)); border-color: rgba(16,185,129,0.3); }
+.platform-card.openai-card:hover { box-shadow: 0 20px 60px rgba(16,185,129,0.15); }
+.platform-card.google-card { background: linear-gradient(145deg, rgba(59,130,246,0.1), var(--surface)); border-color: rgba(59,130,246,0.3); }
+.platform-card.google-card:hover { box-shadow: 0 20px 60px rgba(59,130,246,0.15); }
+.platform-card-icon { font-size: 40px; margin-bottom: 20px; }
+.platform-card h3 { font-size: 22px; font-weight: 800; margin-bottom: 10px; }
+.platform-card .platform-model { font-size: 13px; font-weight: 600; font-family: monospace; padding: 4px 10px; border-radius: 4px; display: inline-block; margin-bottom: 16px; }
+.perp-card .platform-model  { color: #a855f7; background: rgba(168,85,247,0.12); }
+.openai-card .platform-model { color: var(--green); background: rgba(16,185,129,0.1); }
+.google-card .platform-model { color: #3b82f6; background: rgba(59,130,246,0.1); }
+.platform-card p { font-size: 14px; color: var(--text2); line-height: 1.65; }
+.platform-card .platform-users { margin-top: 20px; font-size: 13px; font-weight: 600; color: var(--text3); }
+
+/* ── CTA ───────────────────────────────────────────────── */
+.cta-section {
+  background: var(--bg);
+  padding: 140px 0;
+  text-align: center;
+  position: relative; overflow: hidden;
+}
+.cta-section::before {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 900px; height: 600px; border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(99,102,241,0.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cta-section h2 {
+  font-size: clamp(36px, 5vw, 58px);
+  font-weight: 900; line-height: 1.1;
+  letter-spacing: -0.025em;
+  max-width: 760px; margin: 0 auto 24px;
+}
+.cta-section p {
+  font-size: 18px; color: var(--text2);
+  max-width: 520px; margin: 0 auto 48px; line-height: 1.7;
+}
+.cta-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 32px; }
+.btn-cta-primary {
+  padding: 18px 44px; border-radius: 14px;
+  font-size: 17px; font-weight: 700;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--cyan) 100%);
+  background-size: 200% 200%;
+  animation: gradientShift 3s ease infinite;
+  color: #fff; border: none; cursor: pointer; text-decoration: none;
+  box-shadow: 0 0 50px rgba(99,102,241,0.45);
+  transition: box-shadow 0.3s, transform 0.2s;
+  display: inline-block;
+}
+.btn-cta-primary:hover { box-shadow: 0 0 80px rgba(99,102,241,0.65); transform: translateY(-3px); }
+.cta-email { font-size: 14px; color: var(--text3); }
+.cta-email a { color: var(--primary-light); text-decoration: none; }
+.cta-email a:hover { text-decoration: underline; }
+.cta-quote { margin-top: 16px; font-size: 13px; color: var(--text3); }
+
+/* ── FOOTER ────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 40px 0;
+  background: var(--surface);
+}
+.footer-inner {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;
+}
+.footer-logo { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; color: var(--text); }
+.footer-logo-icon {
+  width: 28px; height: 28px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--primary), var(--cyan));
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.footer-links { display: flex; gap: 24px; }
+.footer-links a { font-size: 13px; color: var(--text3); text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text2); }
+.footer-copy { font-size: 13px; color: var(--text3); }
+
+/* ── RESPONSIVE ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .stat-cards { grid-template-columns: 1fr; }
+  .comparison { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr 1fr; gap: 32px; }
+  .steps::before { display: none; }
+  .cap-grid { grid-template-columns: 1fr; }
+  .platform-cards { grid-template-columns: 1fr; }
+  .fd-body { grid-template-columns: 1fr; }
+  .fd-side { display: none; }
+  .db-metrics { grid-template-columns: repeat(3, 1fr); }
+  .nav-links { display: none; }
+  .footer-inner { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 600px) {
+  .steps { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 40px; }
+  .db-metrics { grid-template-columns: 1fr 1fr; }
+  .fd-metrics-row { grid-template-columns: 1fr 1fr; }
+  .fd-expand-body { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ──────────────────────────────────────────────────────── -->
+<nav id="main-nav">
+  <div class="container nav-inner">
+    <a href="#" class="nav-logo">
+      <div class="nav-logo-icon">📡</div>
+      GEO Radar
+    </a>
+    <ul class="nav-links">
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#capabilities">Capabilities</a></li>
+      <li><a href="#platforms">Platforms</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+    <div class="nav-ctas">
+      <a href="#contact" class="btn-ghost">Book a demo</a>
+      <a href="#contact" class="btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── HERO ─────────────────────────────────────────────────────── -->
+<section class="hero" id="hero">
+  <canvas id="particle-canvas"></canvas>
+  <div class="hero-glow" id="hero-glow"></div>
+
+  <div class="hero-content">
+    <div class="tag">Answer Engine Optimization · GEO Intelligence</div>
+    <h1>
+      <span class="line1">Your business is invisible</span>
+      <span class="line2">to AI search. We fix that.</span>
+    </h1>
+    <p class="hero-sub">
+      GEO Radar audits whether Perplexity, ChatGPT, and Google AI are citing your business — then delivers the exact content, headings, and schema to make sure they do.
+    </p>
+    <div class="hero-ctas">
+      <a href="#contact" class="btn-hero btn-hero-primary">See it in action →</a>
+      <a href="#how" class="btn-hero btn-hero-ghost">How it works ↓</a>
+    </div>
+
+    <!-- 3D Dashboard Mockup -->
+    <div class="dashboard-wrapper" id="dashboard-wrapper">
+      <div class="dashboard-card" id="dashboard-card">
+        <div class="db-titlebar">
+          <div class="db-dots">
+            <div class="db-dot r"></div><div class="db-dot y"></div><div class="db-dot g"></div>
+          </div>
+          <span class="db-title">GEO Radar · Nexus Consulting · nexusconsulting.com</span>
+          <button class="db-run-btn">🚀 Run audit</button>
+        </div>
+        <div class="db-metrics">
+          <div class="db-metric"><div class="db-metric-label">Queries</div><div class="db-metric-value">12</div></div>
+          <div class="db-metric"><div class="db-metric-label">Perplexity</div><div class="db-metric-value" style="color:#a855f7">4/12</div></div>
+          <div class="db-metric"><div class="db-metric-label">ChatGPT</div><div class="db-metric-value" style="color:var(--green)">3/12</div></div>
+          <div class="db-metric"><div class="db-metric-label">Google AI</div><div class="db-metric-value" style="color:#3b82f6">2/12</div></div>
+          <div class="db-metric"><div class="db-metric-label">Cited on All 3</div><div class="db-metric-value good">1/12</div></div>
+        </div>
+        <table class="db-results-table">
+          <thead><tr><th>Query</th><th>Perplexity</th><th>ChatGPT</th><th>Google AI</th><th>Score</th><th>Verdict</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="query-cell">go-to-market strategy for B2B SaaS</td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><div class="score-bar-wrap"><div class="score-bar"><div class="score-bar-fill fill-low" style="width:12%"></div></div>12</div></td>
+              <td class="verdict-text">No direct answer in opening paragraph</td>
+            </tr>
+            <tr>
+              <td class="query-cell">GTM consulting for enterprise software</td>
+              <td><span class="badge cited">✅ Cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><div class="score-bar-wrap"><div class="score-bar"><div class="score-bar-fill fill-mid" style="width:54%"></div></div>54</div></td>
+              <td class="verdict-text">Enterprise content buried below the fold</td>
+            </tr>
+            <tr>
+              <td class="query-cell">how to build a sales motion for SaaS</td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge cited">✅ Cited</span></td>
+              <td><span class="badge cited">✅ Cited</span></td>
+              <td><div class="score-bar-wrap"><div class="score-bar"><div class="score-bar-fill fill-high" style="width:71%"></div></div>71</div></td>
+              <td class="verdict-text">Strong steps, missing benchmark data</td>
+            </tr>
+            <tr>
+              <td class="query-cell">B2B sales strategy consulting</td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><span class="badge no-cited">❌ Not cited</span></td>
+              <td><div class="score-bar-wrap"><div class="score-bar"><div class="score-bar-fill fill-low" style="width:18%"></div></div>18</div></td>
+              <td class="verdict-text">Generic copy, zero evidence or data</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="db-diagnosis">
+          <div class="db-diag-section">
+            <h4>Root Causes</h4>
+            <div class="db-diag-item">Pages written for browsing, not machine extraction</div>
+            <div class="db-diag-item">No statistics or named outcomes across entire site</div>
+            <div class="db-diag-item">FAQPage schema absent — competitors with schema win</div>
+          </div>
+          <div class="db-diag-section">
+            <h4>Priority Fixes</h4>
+            <div class="db-diag-item">Direct-answer opening paragraph on every service page</div>
+            <div class="db-diag-item">Add 2+ concrete data points per page</div>
+            <div class="db-diag-item">Implement FAQPage schema on top 5 pages immediately</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── SOCIAL PROOF BAR ──────────────────────────────────────────── -->
+<div class="social-proof">
+  <div class="container social-inner">
+    <span style="font-size:13px;color:var(--text3);font-weight:500">Live citation checks across</span>
+    <div class="platform-badge"><div class="platform-dot perp"></div>Perplexity</div>
+    <div class="platform-badge"><div class="platform-dot openai"></div>ChatGPT</div>
+    <div class="platform-badge"><div class="platform-dot google"></div>Google AI</div>
+    <div class="proof-divider"></div>
+    <div class="stat-item"><div class="stat-num">500+</div><div class="stat-label">Pages audited</div></div>
+    <div class="proof-divider"></div>
+    <div class="stat-item"><div class="stat-num">3</div><div class="stat-label">AI platforms per query</div></div>
+    <div class="proof-divider"></div>
+    <div class="stat-item"><div class="stat-num">4×</div><div class="stat-label">Avg citation rate improvement</div></div>
+  </div>
+</div>
+
+<!-- ── PROBLEM ───────────────────────────────────────────────────── -->
+<section class="problem" id="problem">
+  <div class="container">
+    <div class="section-tag reveal"><div class="tag">The new reality</div></div>
+    <h2 class="section-headline reveal">Traditional SEO built your rankings.<br>AI search is ignoring them.</h2>
+    <p class="section-sub reveal">Search has fundamentally changed. The page-one rankings you worked for don't determine who gets cited in AI answers. Structure does.</p>
+
+    <div class="stat-cards">
+      <div class="stat-card reveal reveal-delay-1">
+        <div class="stat-card-num">63%</div>
+        <p>of B2B buyers now start their research with an AI engine before visiting any vendor website</p>
+      </div>
+      <div class="stat-card reveal reveal-delay-2">
+        <div class="stat-card-num">3–8</div>
+        <p>sources cited per AI answer. Everyone else — regardless of their SEO rank — is completely invisible to that buyer</p>
+      </div>
+      <div class="stat-card reveal reveal-delay-3">
+        <div class="stat-card-num">84%</div>
+        <p>of informational queries now trigger Google AI Overviews, appearing above all organic results before any blue link is shown</p>
+      </div>
+    </div>
+
+    <div class="comparison reveal">
+      <div class="compare-box old">
+        <div class="compare-title">Google Search — Traditional</div>
+        <div class="search-result highlighted">
+          <div class="result-num">1</div>
+          <div class="result-body">
+            <div class="result-url">yourcompany.com/services</div>
+            <div class="result-title">B2B GTM Strategy Consulting | Your Company</div>
+            <div class="result-snippet">We help startups build go-to-market strategies...</div>
+          </div>
+        </div>
+        <div class="search-result">
+          <div class="result-num">2</div>
+          <div class="result-body">
+            <div class="result-url">competitor-a.com</div>
+            <div class="result-title">GTM Consulting for SaaS — Competitor A</div>
+          </div>
+        </div>
+        <div class="search-result">
+          <div class="result-num">3</div>
+          <div class="result-body">
+            <div class="result-url">competitor-b.com</div>
+            <div class="result-title">Go-To-Market Strategy Services</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;font-size:11px;color:var(--green);font-weight:600">✅ You rank #1 — buyers see you</div>
+      </div>
+      <div class="compare-box new-search">
+        <div class="compare-title">Same query — AI Search today</div>
+        <div class="ai-answer-box">
+          <div class="ai-answer-label">✦ AI Overview</div>
+          <div class="ai-answer-text">A B2B SaaS go-to-market strategy involves defining your ICP, selecting acquisition channels, and sequencing your sales motion. Experts recommend starting with 2–3 focused channels before expanding...</div>
+          <div class="ai-citations">
+            <div class="ai-citation">competitor-a.com</div>
+            <div class="ai-citation">hubspot.com</div>
+            <div class="ai-citation">a16z.com</div>
+            <div class="ai-citation you">yourcompany.com ✗</div>
+          </div>
+        </div>
+        <div class="search-result" style="opacity:0.4">
+          <div class="result-num">1</div>
+          <div class="result-body">
+            <div class="result-url">yourcompany.com/services</div>
+            <div class="result-title">B2B GTM Strategy Consulting | Your Company</div>
+          </div>
+        </div>
+        <div class="you-invisible">❌ You rank #1 but AI doesn't cite you</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ───────────────────────────────────────────────── -->
+<section class="how" id="how">
+  <div class="container">
+    <div class="section-tag reveal"><div class="tag">The process</div></div>
+    <h2 class="section-headline reveal">From invisible to cited in four steps</h2>
+    <p class="section-sub reveal">GEO Radar runs the complete AEO audit pipeline — discovery, crawl, citation check, and fix — in a single session.</p>
+
+    <div class="steps">
+      <div class="step reveal reveal-delay-1">
+        <div class="step-num">1</div>
+        <h3>Discover</h3>
+        <p>Scrape real queries from Google autocomplete and Reddit, clustered by Claude into buyer, partner, and media intent categories</p>
+      </div>
+      <div class="step reveal reveal-delay-2">
+        <div class="step-num">2</div>
+        <h3>Match</h3>
+        <p>Breadth-first site crawl maps every page. Claude matches each query to the most semantically relevant page on your site</p>
+      </div>
+      <div class="step reveal reveal-delay-3">
+        <div class="step-num">3</div>
+        <h3>Check</h3>
+        <p>Live API calls to Perplexity Sonar, OpenAI gpt-4o-search-preview, and Gemini Search Grounding. Real citations, real results</p>
+      </div>
+      <div class="step reveal reveal-delay-4">
+        <div class="step-num">4</div>
+        <h3>Fix</h3>
+        <p>Page-level content rewrite, question-phrased headings, and validated FAQPage schema — ready to implement, not just diagnose</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FULL DASHBOARD PREVIEW ─────────────────────────────────────── -->
+<section class="dashboard-preview-section" id="dashboard">
+  <div class="container">
+    <div class="section-tag reveal"><div class="tag">The product</div></div>
+    <h2 class="section-headline reveal">Everything your team needs.<br>One command center.</h2>
+    <p class="section-sub reveal">Monitor citation rates, track competitors, diagnose gaps, and push fixes — all inside GEO Radar.</p>
+
+    <div class="full-dashboard reveal">
+      <div class="fd-header">
+        <div class="fd-dots"><div class="fd-dot r"></div><div class="fd-dot y"></div><div class="fd-dot g"></div></div>
+        <span class="fd-org">📡 GEO Radar</span>
+        <span class="fd-domain">Nexus Consulting · nexusconsulting.com</span>
+        <button class="fd-run">🚀 Run audit</button>
+      </div>
+      <div class="fd-metrics-row">
+        <div class="fd-metric"><div class="fd-metric-label">Queries checked</div><div class="fd-metric-val">12</div></div>
+        <div class="fd-metric"><div class="fd-metric-label">Cited on Perplexity</div><div class="fd-metric-val" style="color:#a855f7">4/12</div></div>
+        <div class="fd-metric"><div class="fd-metric-label">Cited on ChatGPT</div><div class="fd-metric-val g">3/12</div></div>
+        <div class="fd-metric"><div class="fd-metric-label">Cited on Google AI</div><div class="fd-metric-val b">2/12</div></div>
+        <div class="fd-metric"><div class="fd-metric-label">Cited on All 3</div><div class="fd-metric-val g">1/12</div></div>
+      </div>
+      <div class="fd-body">
+        <div class="fd-main">
+          <table class="fd-table">
+            <thead><tr><th>Query</th><th>Perplexity</th><th>ChatGPT</th><th>Google AI</th><th>Score</th><th>Verdict</th></tr></thead>
+            <tbody>
+              <tr><td class="fd-query">go-to-market strategy for B2B SaaS</td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td>12</td><td class="verdict-text">Generic services page, no direct answer</td></tr>
+              <tr><td class="fd-query">GTM consulting for enterprise software</td><td><span class="badge cited">✅ Cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td>54</td><td class="verdict-text">Client roster cited, service page not</td></tr>
+              <tr><td class="fd-query">how to build a sales motion for SaaS</td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge cited">✅ Cited</span></td><td><span class="badge cited">✅ Cited</span></td><td>71</td><td class="verdict-text">Strong steps, missing benchmark stats</td></tr>
+              <tr><td class="fd-query">B2B sales strategy for startups</td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td>18</td><td class="verdict-text">No evidence, data, or specifics</td></tr>
+              <tr><td class="fd-query">GTM agency for Series A companies</td><td><span class="badge cited">✅ Cited</span></td><td><span class="badge no-cited">❌ Not cited</span></td><td><span class="badge cited">✅ Cited</span></td><td>63</td><td class="verdict-text">Cited for Series A content specifically</td></tr>
+            </tbody>
+          </table>
+          <div class="fd-bottom">
+            <div class="fd-expander-header">
+              ▾ <span>go-to-market strategy for B2B SaaS</span>
+              &nbsp;&nbsp;<span class="badge no-cited">Perplexity ❌</span>&nbsp;
+              <span class="badge no-cited">ChatGPT ❌</span>&nbsp;
+              <span class="badge no-cited">Google AI ❌</span>&nbsp;
+              &nbsp;· readiness 12/100
+            </div>
+            <div class="fd-expand-body">
+              <div>
+                <div class="fd-col-title p">Perplexity</div>
+                <div class="fd-not-citing">Not citing you. Currently citing:</div>
+                <div class="fd-cite-url">notion.so/blog/gtm-strategy</div>
+                <div class="fd-cite-url">hubspot.com/go-to-market</div>
+                <div class="fd-cite-url">a16z.com/go-to-market</div>
+              </div>
+              <div>
+                <div class="fd-col-title o">ChatGPT</div>
+                <div class="fd-not-citing">Not citing you. Currently citing:</div>
+                <div class="fd-cite-url">openviewpartners.com/gtm</div>
+                <div class="fd-cite-url">bain.com/gtm-consulting</div>
+                <div class="fd-cite-url">mckinsey.com/saas-growth</div>
+              </div>
+              <div>
+                <div class="fd-col-title g">Google AI</div>
+                <div class="fd-not-citing">Not citing you. Currently citing:</div>
+                <div class="fd-cite-url">hbr.org/gtm-saas</div>
+                <div class="fd-cite-url">gartner.com/gtm-enterprise</div>
+                <div class="fd-cite-url">mckinsey.com/saas-growth</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fd-side">
+          <div class="fd-side-title">Strategic Diagnosis</div>
+          <div class="fd-cause">Pages are written for browsing, not machine extraction — answers are buried</div>
+          <div class="fd-cause">No statistics, named outcomes, or specific timelines anywhere on the site</div>
+          <div class="fd-cause">FAQPage schema absent across all pages — competitors with schema consistently win</div>
+          <hr class="fd-divider">
+          <div class="fd-side-title">Priority Fixes</div>
+          <div class="fd-fix"><span class="fd-fix-num">1.</span>Add a direct-answer opening paragraph to every service page</div>
+          <div class="fd-fix"><span class="fd-fix-num">2.</span>Add at least two concrete data points per page</div>
+          <div class="fd-fix"><span class="fd-fix-num">3.</span>Implement FAQPage schema on your top 5 pages immediately</div>
+          <hr class="fd-divider">
+          <div class="fd-side-title" style="color:var(--cyan)">Citation Trend</div>
+          <div style="display:flex;gap:4px;align-items:flex-end;height:48px;margin-top:8px">
+            <div style="flex:1;background:rgba(99,102,241,0.3);height:30%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:rgba(99,102,241,0.4);height:40%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:rgba(99,102,241,0.5);height:35%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:rgba(99,102,241,0.6);height:50%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:rgba(99,102,241,0.7);height:45%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:rgba(99,102,241,0.8);height:60%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:var(--primary);height:75%;border-radius:3px 3px 0 0"></div>
+            <div style="flex:1;background:var(--cyan);height:100%;border-radius:3px 3px 0 0;box-shadow:0 0 12px var(--cyan)"></div>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-top:6px">Citation rate improving after fixes →</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CAPABILITIES ───────────────────────────────────────────────── -->
+<section class="capabilities" id="capabilities">
+  <div class="container">
+    <div class="section-tag reveal"><div class="tag">Enterprise capabilities</div></div>
+    <h2 class="section-headline reveal">Built for teams who measure<br>everything that matters</h2>
+    <p class="section-sub reveal">Every feature below drives a measurable outcome. No dashboards for the sake of dashboards.</p>
+
+    <div class="cap-grid">
+      <div class="cap-card reveal reveal-delay-1" data-tilt>
+        <div class="cap-icon">📈</div>
+        <h3>Continuous Monitoring</h3>
+        <p>Set your queries once. GEO Radar runs citation checks on your schedule — weekly, bi-weekly, or monthly. Get alerted the moment a competitor takes a citation you owned.</p>
+        <span class="cap-tag">Automated · Supabase cron</span>
+      </div>
+      <div class="cap-card reveal reveal-delay-2" data-tilt>
+        <div class="cap-icon">📊</div>
+        <h3>ROI Dashboard</h3>
+        <p>Mark fixes as implemented. See citation rate before vs. after. Produce a chart that proves AEO investment is driving measurable impact — from your CMO to your board.</p>
+        <span class="cap-tag">Before/after · Trend charts</span>
+      </div>
+      <div class="cap-card reveal reveal-delay-3" data-tilt>
+        <div class="cap-icon">🎯</div>
+        <h3>Competitor Share of Voice</h3>
+        <p>Track which competitors are being cited for every query you monitor. Know exactly where you're losing deals before prospects ever reach your website.</p>
+        <span class="cap-tag">Weekly leaderboard · Alerts</span>
+      </div>
+      <div class="cap-card reveal reveal-delay-1" data-tilt>
+        <div class="cap-icon">✍️</div>
+        <h3>Content Brief Generator</h3>
+        <p>Turn every audit finding into a writer-ready brief: word count, required data points, suggested structure, headings, and FAQ schema. Your content team executes — no AEO expertise needed.</p>
+        <span class="cap-tag">Claude-powered · Instant</span>
+      </div>
+      <div class="cap-card reveal reveal-delay-2" data-tilt>
+        <div class="cap-icon">🔌</div>
+        <h3>CMS Integration</h3>
+        <p>Push rewritten content directly to Webflow, WordPress, or HubSpot as a draft. One click from audit finding to content in your CMS, ready for review and publish.</p>
+        <span class="cap-tag">Webflow · WordPress · HubSpot</span>
+      </div>
+      <div class="cap-card reveal reveal-delay-3" data-tilt>
+        <div class="cap-icon">💬</div>
+        <h3>Slack & Email Reports</h3>
+        <p>Weekly citation digest delivered to your team's Slack channel. Executives see the number without logging in. Alerts when a high-priority query drops below your threshold.</p>
+        <span class="cap-tag">Slack webhook · Resend email</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PLATFORMS ──────────────────────────────────────────────────── -->
+<section class="platforms" id="platforms">
+  <div class="container">
+    <div class="section-tag reveal"><div class="tag">Citation coverage</div></div>
+    <h2 class="section-headline reveal">Every AI engine that matters.<br>One audit.</h2>
+    <p class="section-sub reveal">GEO Radar checks the three platforms where your buyers are actually researching right now.</p>
+
+    <div class="platform-cards">
+      <div class="platform-card perp-card reveal reveal-delay-1">
+        <div class="platform-card-icon">🔮</div>
+        <h3>Perplexity</h3>
+        <div class="platform-model">sonar-pro API</div>
+        <p>The fastest-growing AI research tool among analysts, investors, and technical buyers. Live web retrieval with explicit citation URLs checked against your domains in real time.</p>
+        <div class="platform-users">100M+ monthly active researchers</div>
+      </div>
+      <div class="platform-card openai-card reveal reveal-delay-2">
+        <div class="platform-card-icon">🤖</div>
+        <h3>ChatGPT</h3>
+        <div class="platform-model">gpt-4o-search-preview</div>
+        <p>200 million active users, now with live web search. GEO Radar uses OpenAI's search-enabled model — the same engine running citation lookups when your buyers ask ChatGPT about your category.</p>
+        <div class="platform-users">200M+ monthly active users</div>
+      </div>
+      <div class="platform-card google-card reveal reveal-delay-3">
+        <div class="platform-card-icon">🔵</div>
+        <h3>Google AI</h3>
+        <div class="platform-model">Gemini + Search Grounding</div>
+        <p>Google AI Overviews appear above organic results for 84% of informational queries. GEO Radar uses Gemini with Search Grounding — the closest available proxy to what Google AI shows your buyers.</p>
+        <div class="platform-users">8.5B+ daily Google searches</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA ────────────────────────────────────────────────────────── -->
+<section class="cta-section" id="contact">
+  <div class="container" style="position:relative;z-index:2">
+    <div class="tag reveal" style="display:inline-flex">Ready to start</div>
+    <h2 class="reveal">The businesses that own AI search<br class="gradient-text"> in your category are doing this now.</h2>
+    <p class="reveal">Every week you're not cited is a week your competitor is. We'll run a live audit on your site in 30 minutes — you'll leave with a report and a plan.</p>
+    <div class="cta-buttons reveal">
+      <a href="mailto:hello@georadar.io?subject=Demo Request" class="btn-cta-primary">Book your demo →</a>
+    </div>
+    <div class="cta-email reveal">or email us directly at <a href="mailto:hello@georadar.io">hello@georadar.io</a></div>
+    <div class="cta-quote reveal">Pricing is based on your team size and query volume. Reach out for a custom quote.</div>
+  </div>
+</section>
+
+<!-- ── FOOTER ─────────────────────────────────────────────────────── -->
+<footer>
+  <div class="container footer-inner">
+    <div class="footer-logo">
+      <div class="footer-logo-icon">📡</div>
+      GEO Radar
+    </div>
+    <div class="footer-links">
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+      <a href="mailto:hello@georadar.io">Contact</a>
+    </div>
+    <div class="footer-copy">© 2025 GEO Radar. All rights reserved.</div>
+  </div>
+</footer>
+
+<script>
+// ── PARTICLE CANVAS ─────────────────────────────────────────────────
+const canvas = document.getElementById('particle-canvas');
+const ctx    = canvas.getContext('2d');
+let W, H, particles;
+
+function resize() {
+  W = canvas.width  = canvas.offsetWidth;
+  H = canvas.height = canvas.offsetHeight;
+}
+
+function Particle() {
+  this.x  = Math.random() * W;
+  this.y  = Math.random() * H;
+  this.vx = (Math.random() - 0.5) * 0.4;
+  this.vy = (Math.random() - 0.5) * 0.4;
+  this.r  = Math.random() * 1.5 + 0.5;
+  this.alpha = Math.random() * 0.5 + 0.1;
+}
+
+function initParticles() {
+  particles = Array.from({length: 80}, () => new Particle());
+}
+
+function drawParticles() {
+  ctx.clearRect(0, 0, W, H);
+  particles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+    if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(99,102,241,${p.alpha})`;
+    ctx.fill();
+  });
+  // draw connections
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 120) {
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = `rgba(99,102,241,${0.12 * (1 - dist/120)})`;
+        ctx.lineWidth = 0.6;
+        ctx.stroke();
+      }
+    }
+  }
+  requestAnimationFrame(drawParticles);
+}
+
+window.addEventListener('resize', () => { resize(); initParticles(); });
+resize(); initParticles(); drawParticles();
+
+// ── HERO MOUSE GLOW ─────────────────────────────────────────────────
+const heroSection = document.getElementById('hero');
+const heroGlow    = document.getElementById('hero-glow');
+
+heroSection.addEventListener('mousemove', e => {
+  const rect = heroSection.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  heroGlow.style.left = x + 'px';
+  heroGlow.style.top  = y + 'px';
+  heroGlow.style.transform = 'translate(-50%, -50%)';
+});
+
+// ── 3D DASHBOARD TILT ───────────────────────────────────────────────
+const wrapper = document.getElementById('dashboard-wrapper');
+const card    = document.getElementById('dashboard-card');
+let isFloating = true;
+let floatOffset = 0;
+let floatDir    = 1;
+let tiltX = 0, tiltY = 0;
+let targetTiltX = 0, targetTiltY = 0;
+
+heroSection.addEventListener('mousemove', e => {
+  const rect = wrapper.getBoundingClientRect();
+  const cx = rect.left + rect.width  / 2;
+  const cy = rect.top  + rect.height / 2;
+  targetTiltX = -((e.clientY - cy) / (rect.height / 2)) * 10;
+  targetTiltY =  ((e.clientX - cx) / (rect.width  / 2)) * 12;
+});
+
+heroSection.addEventListener('mouseleave', () => {
+  targetTiltX = 0; targetTiltY = 0;
+});
+
+function animateTilt() {
+  tiltX += (targetTiltX - tiltX) * 0.08;
+  tiltY += (targetTiltY - tiltY) * 0.08;
+  // combine with gentle float
+  floatOffset += 0.02 * floatDir;
+  if (Math.abs(floatOffset) > 8) floatDir *= -1;
+  const shadow = `0 ${40 + floatOffset}px ${120 + floatOffset * 2}px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05), 0 0 ${60 + Math.abs(tiltY) * 3}px rgba(99,102,241,0.15)`;
+  card.style.transform = `rotateX(${tiltX}deg) rotateY(${tiltY}deg) translateY(${floatOffset}px)`;
+  card.style.boxShadow = shadow;
+  requestAnimationFrame(animateTilt);
+}
+animateTilt();
+
+// ── FEATURE CARD 3D TILT ────────────────────────────────────────────
+document.querySelectorAll('.cap-card[data-tilt]').forEach(card => {
+  card.addEventListener('mousemove', e => {
+    const rect = card.getBoundingClientRect();
+    const cx = rect.left + rect.width  / 2;
+    const cy = rect.top  + rect.height / 2;
+    const rx = -((e.clientY - cy) / (rect.height / 2)) * 8;
+    const ry =  ((e.clientX - cx) / (rect.width  / 2)) * 8;
+    card.style.transform = `perspective(800px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(8px)`;
+  });
+  card.addEventListener('mouseleave', () => {
+    card.style.transform = 'perspective(800px) rotateX(0) rotateY(0) translateZ(0)';
+  });
+});
+
+// ── SCROLL REVEALS ──────────────────────────────────────────────────
+const io = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+      io.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.12 });
+
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+// ── STICKY NAV ──────────────────────────────────────────────────────
+const nav = document.getElementById('main-nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 40);
+});
+
+// ── SMOOTH SCROLL ───────────────────────────────────────────────────
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    const target = document.querySelector(a.getAttribute('href'));
+    if (target) {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+</script>
+</body>
+</html>

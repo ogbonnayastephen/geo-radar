@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "landing",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8765"],
+      "port": 8765
+    },
+    {
+      "name": "app",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "app.py", "--server.port", "8501", "--server.headless", "true"],
+      "port": 8501
+    }
+  ]
+}

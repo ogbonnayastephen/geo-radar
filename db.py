@@ -10,7 +10,7 @@ New additions:
   save_run()        — now accepts user_id; mutates result dicts to add query_result_id
   save_fix_attempt()— persists a proof-of-fix before/after comparison
   get_fix_attempts()— retrieves fix history for a specific query result
-  get_user_orgs()   — returns distinct org names for the agency client switcher
+  get_user_orgs()   — returns distinct org names for the client switcher
 """
 
 import json
@@ -50,19 +50,22 @@ def init() -> None:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS query_results (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id             INTEGER NOT NULL REFERENCES runs(id),
-                query              TEXT    NOT NULL,
-                page_url           TEXT,
-                perplexity_cited   INTEGER,
-                chatgpt_cited      INTEGER,
-                google_cited       INTEGER,
-                readiness_score    INTEGER,
-                verdict            TEXT,
-                gaps               TEXT,
-                rewritten_section  TEXT,
-                suggested_headings TEXT,
-                faq_schema         TEXT
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id               INTEGER NOT NULL REFERENCES runs(id),
+                query                TEXT    NOT NULL,
+                page_url             TEXT,
+                perplexity_cited     INTEGER,
+                chatgpt_cited        INTEGER,
+                google_cited         INTEGER,
+                perplexity_citations TEXT,
+                chatgpt_citations    TEXT,
+                google_citations     TEXT,
+                readiness_score      INTEGER,
+                verdict              TEXT,
+                gaps                 TEXT,
+                rewritten_section    TEXT,
+                suggested_headings   TEXT,
+                faq_schema           TEXT
             )
         """)
         conn.execute("""
@@ -92,6 +95,11 @@ def init() -> None:
                 UNIQUE(user_id, org_name, query)
             )
         """)
+        for _col in ["perplexity_citations", "chatgpt_citations", "google_citations"]:
+            try:
+                conn.execute(f"ALTER TABLE query_results ADD COLUMN {_col} TEXT")
+            except sqlite3.OperationalError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -126,18 +134,21 @@ def save_run(
 
         for r in results:
             qr_row = {
-                "run_id":             run_id,
-                "query":              r.get("query", ""),
-                "page_url":           r.get("page_url", ""),
-                "perplexity_cited":   r.get("perplexity_cited"),
-                "chatgpt_cited":      r.get("chatgpt_cited"),
-                "google_cited":       r.get("google_cited"),
-                "readiness_score":    r.get("readiness_score"),
-                "verdict":            r.get("verdict", ""),
-                "gaps":               r.get("gaps") or [],
-                "rewritten_section":  r.get("rewritten_section", ""),
-                "suggested_headings": r.get("suggested_headings") or [],
-                "faq_schema":         r.get("faq_schema", ""),
+                "run_id":                run_id,
+                "query":                 r.get("query", ""),
+                "page_url":              r.get("page_url", ""),
+                "perplexity_cited":      r.get("perplexity_cited"),
+                "chatgpt_cited":         r.get("chatgpt_cited"),
+                "google_cited":          r.get("google_cited"),
+                "perplexity_citations":  r.get("perplexity_citations") or [],
+                "chatgpt_citations":     r.get("chatgpt_citations") or [],
+                "google_citations":      r.get("google_citations") or [],
+                "readiness_score":       r.get("readiness_score"),
+                "verdict":               r.get("verdict", ""),
+                "gaps":                  r.get("gaps") or [],
+                "rewritten_section":     r.get("rewritten_section", ""),
+                "suggested_headings":    r.get("suggested_headings") or [],
+                "faq_schema":            r.get("faq_schema", ""),
             }
             qr_res = sb.table("query_results").insert(qr_row).execute()
             if qr_res.data:
@@ -165,8 +176,9 @@ def save_run(
                 qr = conn.execute(
                     """INSERT INTO query_results
                        (run_id, query, page_url, perplexity_cited, chatgpt_cited, google_cited,
+                        perplexity_citations, chatgpt_citations, google_citations,
                         readiness_score, verdict, gaps, rewritten_section, suggested_headings, faq_schema)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         run_id,
                         r.get("query", ""),
@@ -174,6 +186,9 @@ def save_run(
                         int(bool(r.get("perplexity_cited"))) if r.get("perplexity_cited") is not None else None,
                         int(bool(r.get("chatgpt_cited"))) if r.get("chatgpt_cited") is not None else None,
                         int(bool(r.get("google_cited"))) if r.get("google_cited") is not None else None,
+                        json.dumps(r.get("perplexity_citations") or []),
+                        json.dumps(r.get("chatgpt_citations") or []),
+                        json.dumps(r.get("google_citations") or []),
                         r.get("readiness_score"),
                         r.get("verdict", ""),
                         json.dumps(r.get("gaps") or []),
@@ -308,7 +323,7 @@ def get_run_queries(run_id: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# AGENCY — client switcher
+# CLIENTS — multi-client switcher
 # ---------------------------------------------------------------------------
 def get_stale_orgs(user_id: str, days: int = 14) -> list[dict]:
     """
@@ -506,3 +521,44 @@ def get_user_orgs(user_id: str) -> list[str]:
                 (user_id,),
             ).fetchall()
             return [r[0] for r in rows]
+
+
+def get_all_orgs_summary(user_id: str) -> list[dict]:
+    """
+    Return one summary row per org: most recent run date, cited_count,
+    query_count. Used by the client overview to show all clients at a glance.
+    """
+    if _USE_SUPABASE:
+        res = (
+            _sb().table("runs")
+            .select("org_name, created_at, cited_count, query_count")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        seen: dict[str, dict] = {}
+        for row in (res.data or []):
+            name = row["org_name"]
+            if name not in seen:
+                seen[name] = {
+                    "org_name":      name,
+                    "last_run_date": row["created_at"],
+                    "cited_count":   row["cited_count"],
+                    "query_count":   row["query_count"],
+                }
+        return list(seen.values())
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT org_name,
+                          MAX(created_at)                          AS last_run_date,
+                          cited_count,
+                          query_count
+                   FROM runs
+                   WHERE user_id = ? OR user_id IS NULL
+                   GROUP BY org_name
+                   ORDER BY last_run_date DESC""",
+                (user_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]

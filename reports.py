@@ -2,7 +2,7 @@
 GEO Radar — PDF audit report generator.
 
 Produces a branded, client-ready PDF using reportlab.
-Usage: pdf_bytes = generate_pdf(org_name, results, synthesis, agency_name)
+Usage: pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by)
 Returns bytes suitable for st.download_button(mime="application/pdf").
 """
 
@@ -21,7 +21,7 @@ def generate_pdf(
     org_name: str,
     results: list[dict],
     synthesis: dict | None,
-    agency_name: str = "GEO Radar",
+    prepared_by: str = "GEO Radar",
 ) -> bytes:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -95,7 +95,7 @@ def generate_pdf(
     story.append(Paragraph(org_name, sub_s))
     story.append(HRFlowable(width="100%", thickness=3, color=indigo, spaceAfter=12))
     story.append(Paragraph(
-        f"Prepared by <b>{agency_name}</b>  ·  {datetime.now().strftime('%B %d, %Y')}",
+        f"Prepared by <b>{prepared_by}</b>  ·  {datetime.now().strftime('%B %d, %Y')}",
         meta_s,
     ))
     story.append(Spacer(1, 0.2 * inch))

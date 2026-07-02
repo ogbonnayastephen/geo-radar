@@ -15,6 +15,7 @@ search are both publicly accessible.
 
 import json
 import time
+from collections import Counter
 import requests
 from anthropic import Anthropic
 
@@ -61,6 +62,12 @@ def build_discovery_prompt(
     categories: list[str],
 ) -> str:
     categories_str = ", ".join(categories)
+    stage_defs = """
+Buying stage definitions (use these to decide which bucket each query belongs in):
+- awareness: broad "what is / how does" queries; buyer has a problem but no vendor intent yet
+- consideration: comparing options, "best X for Y", shortlisting; buyer is evaluating solutions
+- evaluation: brand-specific queries, social proof, reviews, comparisons naming specific vendors
+- decision: pricing, "how to get started", "get a demo", "sign up"; strong conversion intent"""
     return f"""\
 Organization: {org_name}
 Services offered: {services}
@@ -68,6 +75,7 @@ Customers or audiences served: {audience}
 Location: {location}
 
 Intent categories to group queries into: {categories_str}
+{stage_defs}
 
 Raw queries scraped from Google autocomplete and Reddit (unfiltered):
 {json.dumps(raw_queries, indent=2)}
@@ -301,7 +309,7 @@ def discover_queries(
     Returns: {<category keys>, error, raw_count, seeds_used}
     """
     if categories is None:
-        categories = ["customers", "partners", "media"]
+        categories = ["awareness", "consideration", "evaluation", "decision"]
     def progress(msg):
         if progress_callback:
             progress_callback(msg)
@@ -328,14 +336,16 @@ def discover_queries(
         raw_queries.extend(titles)
         time.sleep(0.5)
 
-    # Deduplicate the full raw pile
-    seen = set()
-    unique = []
+    # Deduplicate while tracking how many times each query appeared across seeds
+    _counts = Counter(q.strip().lower() for q in raw_queries if q.strip())
+    seen    = set()
+    unique  = []
     for q in raw_queries:
         q = q.strip()
         if q and q.lower() not in seen:
             seen.add(q.lower())
             unique.append(q)
+    unique_counts = {q: _counts[q.lower()] for q in unique}
 
     raw_count = len(unique)
     progress(f"Collected {raw_count} real queries. Asking Claude to organize them...")
@@ -347,4 +357,5 @@ def discover_queries(
     clustered = cluster_with_claude(unique, org_name, services, audience, location, categories, keys)
     clustered["raw_count"]  = raw_count
     clustered["seeds_used"] = seeds
+    clustered["_freq"]      = unique_counts
     return clustered
