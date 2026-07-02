@@ -50,7 +50,10 @@ _REQUIRE_LOGIN = False
 
 db.init()
 
-st.set_page_config(page_title="GEO Radar", page_icon="📡", layout="wide")
+st.set_page_config(
+    page_title="GEO Radar", page_icon="📡", layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # ---------------------------------------------------------------------------
 # Visual theme polish (presentation-only; does not touch widget keys,
@@ -70,8 +73,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-[data-testid="stToolbar"] { visibility: hidden; }
-[data-testid="stDecoration"] { display: none; }
 
 [data-testid="stMetric"] {
     background: #F9FAFB; border: 1px solid #E5E7EB;
