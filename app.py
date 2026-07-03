@@ -634,7 +634,7 @@ if analyze_btn and homepage_url:
     _merged_tracked = [
         {"include": True, "query": t["query"],
          "page_url": t.get("page_url") or matches.get(t["query"], ""),
-         "stage": "", "freq": 0}
+         "stage": "📌 Tracked", "freq": 0}
         for t in tracked
     ]
     _merged_new = sorted(
@@ -672,7 +672,7 @@ if st.session_state.audit_table and not st.session_state.audit_done:
         if n >= 5: return "🔥🔥🔥"
         if n >= 3: return "🔥🔥"
         if n >= 1: return "🔥"
-        return ""
+        return "—"
 
     if st.session_state.get("using_tracked"):
         n_tracked = len(st.session_state.audit_table)

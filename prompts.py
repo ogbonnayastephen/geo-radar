@@ -88,14 +88,21 @@ page content or marked [ORG TO CONFIRM].>"
 Rules:
 - Output must be parseable by json.loads(). Escape all inner quotes and newlines correctly.
 - Never invent statistics, services, or claims. Mark anything uncertain as [ORG TO CONFIRM: ...].
-- ABSENCE CLAIMS MUST BE SCOPED. In "verdict" and "gaps", you are describing the page content \
-provided above, not the live website. Never use absolute language like "never," "zero," \
-"does not exist," "nowhere," or "impossible" to describe something missing — you cannot see \
-tabs, accordions, JavaScript-rendered sections, or content below what was provided, so an \
-absolute claim can be wrong even when your read of the provided content is correct. Instead, \
-use scoped language: "not visible in the analyzed content," "doesn't surface in the extractable \
-text reviewed," or "the provided content does not address X." This applies to "verdict" and \
-every item in "gaps."
+- ABSENCE CLAIMS MUST BE SCOPED — NO EXCEPTIONS. In "verdict" and "gaps", you are describing \
+the page content provided above, not the live website. Banned words, in any form, for any \
+reason, even when the page is completely unrelated to the query: "never," "always," "zero," \
+"does not exist," "nowhere," "impossible." This is not just about content that might exist \
+lower on the page — it also covers your own conclusions, like calling it "impossible" for an \
+engine to cite an unrelated page. State the mismatch as a plain fact instead. \
+Before: "The page is about landscaping and does not address CRM software in any way, making it \
+impossible for an AI engine to cite it for this query." \
+After: "The analyzed content is about landscaping services, not CRM software — it doesn't \
+answer this query." \
+Before: "The provided content never addresses beginners specifically." \
+After: "The provided content doesn't address beginners specifically." \
+If you catch yourself about to write "never," "impossible," or "zero," stop and rewrite the \
+sentence with "doesn't," "isn't visible in the analyzed content," or "the content reviewed \
+doesn't address X." This applies to "verdict" and every item in "gaps," with zero exceptions.
 - The rewritten_section must lead with the answer in the first sentence.
 - CRITICAL SCHEMA RULE: Every question and answer in the faq_schema must only use information \
 that is explicitly visible in the page content provided. Do not include any answer that contains \
