@@ -9,6 +9,8 @@ Returns bytes suitable for st.download_button(mime="application/pdf").
 from io import BytesIO
 from datetime import datetime
 
+from radar import cite_confidence_for
+
 
 INDIGO   = "#6366F1"
 DARK     = "#111827"
@@ -80,12 +82,9 @@ def generate_pdf(
             ("PADDING",      (0, 0), (-1, -1), 6),
         ])
 
-    def badge(cited):
-        if cited is True:
-            return "✓ Cited"
-        if cited is False:
-            return "✗ Not cited"
-        return "—"
+    def badge(r, engine):
+        """Same confidence text as the live UI and CSV — kept in sync deliberately."""
+        return cite_confidence_for(r, engine)
 
     story = []
 
@@ -135,6 +134,21 @@ def generate_pdf(
     story.append(metrics_tbl)
     story.append(Spacer(1, 0.3 * inch))
 
+    # ── METHODOLOGY & LIMITATIONS ────────────────────────────────────────────
+    story.append(Paragraph("Methodology & Limitations", h2_s))
+    story.append(Paragraph(
+        "Citation checks run multiple times per query and are reported as a confidence band "
+        "(e.g. “Likely 2/3”) because AI answer engines can return different citations "
+        "on different runs — re-testing live may not always match this snapshot. Content "
+        "analysis reads the first ~24,000 characters of each page's visible HTML text; it does "
+        "not execute JavaScript, so content inside tabs, accordions, or scripts that load after "
+        "the initial page load is not part of this analysis. Any statement that content is "
+        "“missing” or “not addressed” describes the content reviewed, not "
+        "necessarily the entire live page.",
+        small_s,
+    ))
+    story.append(Spacer(1, 0.2 * inch))
+
     # ── STRATEGIC DIAGNOSIS ──────────────────────────────────────────────────
     if synthesis and not synthesis.get("error"):
         story.append(Paragraph("Strategic Diagnosis", h1_s))
@@ -162,9 +176,9 @@ def generate_pdf(
         score = f"{r['readiness_score']}/100" if r.get("readiness_score") is not None else "—"
         rows.append([
             Paragraph(r.get("query", ""), ps("QC", fontSize=9)),
-            badge(r.get("perplexity_cited")),
-            badge(r.get("chatgpt_cited")),
-            badge(r.get("google_cited")),
+            badge(r, "perplexity"),
+            badge(r, "chatgpt"),
+            badge(r, "google"),
             score,
             Paragraph((r.get("verdict") or "")[:100], ps("VC", fontSize=9)),
         ])
@@ -193,9 +207,9 @@ def generate_pdf(
             block.append(Paragraph(r.get("query", ""), h2_s))
             block.append(Paragraph(
                 f"Page: {r.get('page_url') or '—'}  ·  "
-                f"Perplexity {badge(r.get('perplexity_cited'))}  "
-                f"ChatGPT {badge(r.get('chatgpt_cited'))}  "
-                f"Google AI {badge(r.get('google_cited'))}  "
+                f"Perplexity {badge(r, 'perplexity')}  "
+                f"ChatGPT {badge(r, 'chatgpt')}  "
+                f"Google AI {badge(r, 'google')}  "
                 f"Score {r.get('readiness_score', '—')}/100",
                 small_s,
             ))

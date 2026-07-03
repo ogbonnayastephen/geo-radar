@@ -143,25 +143,28 @@ if not _REQUIRE_LOGIN and not st.session_state.user:
     st.session_state.user = {"id": st.session_state["_guest_id"], "email": "guest@geo-radar.local"}
 
 # ---------------------------------------------------------------------------
-# Badge helpers
+# Badge helpers — thin emoji wrapper around radar.cite_confidence_label(),
+# the single source of truth for confidence-band thresholds/text. Do not
+# reimplement the High/Likely/Uncertain/Not-cited logic here or in reports.py.
 # ---------------------------------------------------------------------------
-def _cite_badge(cited, cited_count=None, sample_count=1) -> str:
-    if sample_count and sample_count > 1 and cited_count is not None:
-        if cited_count >= sample_count:
-            return f"✅ High ({cited_count}/{sample_count})"
-        if cited_count > 0:
-            label = "Likely" if cited_count / sample_count >= 0.67 else "Uncertain"
-            return f"⚠️ {label} ({cited_count}/{sample_count})"
-        return f"❌ Not cited (0/{sample_count})"
-    return "✅ Cited" if cited else ("❌ Not cited" if cited is False else "⚠️ No key")
+_BADGE_EMOJI = {
+    "High":       "✅",
+    "Cited":      "✅",
+    "Likely":     "⚠️",
+    "Uncertain":  "⚠️",
+    "Not cited":  "❌",
+    "No key":     "⚠️",
+}
+
+
+def _emoji_for(label: str) -> str:
+    prefix = label.split(" (")[0]  # strip "(2/3)" before matching
+    return _BADGE_EMOJI.get(prefix, "")
 
 
 def citation_badge(r: dict, engine: str) -> str:
-    return _cite_badge(
-        r.get(f"{engine}_cited"),
-        r.get(f"{engine}_cited_count"),
-        r.get(f"{engine}_sample_count", 1),
-    )
+    label = radar.cite_confidence_for(r, engine)
+    return f"{_emoji_for(label)} {label}".strip()
 
 
 def google_badge(r: dict) -> str:
@@ -927,6 +930,12 @@ if st.session_state.audit_done and st.session_state.audit_results:
 
     if needs_fixes:
         st.markdown("### Fixes")
+        st.caption(
+            "Gap findings describe the page content this audit reviewed (first ~24,000 "
+            "characters of visible text, no JavaScript execution) — verify against the live "
+            "page before sharing externally. Citation results are sampled across multiple runs "
+            "and shown as a confidence band because live AI answers can vary run to run."
+        )
         for i, r in enumerate(needs_fixes):
             score_part  = f"  ·  readiness {r['readiness_score']}/100" if r.get("readiness_score") else ""
             google_part = (f"   Google AI {google_badge(r)}"
@@ -1055,9 +1064,9 @@ if st.session_state.audit_done and st.session_state.audit_results:
     for r in results:
         writer.writerow([
             r["query"],
-            r.get("perplexity_cited"), r.get("perplexity_matched_url"),
-            r.get("chatgpt_cited"),    r.get("chatgpt_matched_url"),
-            r.get("google_cited"),     r.get("google_matched_url"),
+            radar.cite_confidence_for(r, "perplexity"), r.get("perplexity_matched_url"),
+            radar.cite_confidence_for(r, "chatgpt"),     r.get("chatgpt_matched_url"),
+            radar.cite_confidence_for(r, "google"),      r.get("google_matched_url"),
             r.get("readiness_score"),  r.get("verdict"),
             " | ".join(r.get("gaps") or []),
             r.get("rewritten_section") or "",

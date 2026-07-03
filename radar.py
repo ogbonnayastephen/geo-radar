@@ -332,6 +332,36 @@ def _aggregate_samples(samples: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# CONFIDENCE LABELS — shared human-readable framing for sampled citation
+# results. app.py (live UI + CSV) and reports.py (PDF) both call this so a
+# result is never described differently on different surfaces.
+# ---------------------------------------------------------------------------
+def cite_confidence_label(cited, cited_count=None, sample_count=1) -> str:
+    """Single source of truth — do not reimplement this elsewhere."""
+    if sample_count and sample_count > 1 and cited_count is not None:
+        if cited_count >= sample_count:
+            return f"High ({cited_count}/{sample_count})"
+        if cited_count > 0:
+            label = "Likely" if cited_count / sample_count >= 0.67 else "Uncertain"
+            return f"{label} ({cited_count}/{sample_count})"
+        return f"Not cited (0/{sample_count})"
+    if cited is True:
+        return "Cited"
+    if cited is False:
+        return "Not cited"
+    return "No key"
+
+
+def cite_confidence_for(r: dict, engine: str) -> str:
+    """Convenience wrapper: pull the right fields off a result dict for one engine."""
+    return cite_confidence_label(
+        r.get(f"{engine}_cited"),
+        r.get(f"{engine}_cited_count"),
+        r.get(f"{engine}_sample_count", 1),
+    )
+
+
+# ---------------------------------------------------------------------------
 # SSRF GUARD — shared with crawler.py
 # ---------------------------------------------------------------------------
 def is_safe_url(url: str) -> tuple[bool, str]:

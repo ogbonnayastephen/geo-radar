@@ -24,7 +24,7 @@ You judge pages against the signals that actually drive AI citations:
 
 You evaluate pages from the perspective of a potential customer or buyer who is researching a product, service, or solution. Your job is to identify whether the page clearly answers their question and gives AI engines enough structured, specific content to cite it as an authoritative source.
 
-You are precise, you do not pad, and you never invent facts about the organization. If the page lacks the information needed to answer the query, you say so and describe what content must be created rather than fabricating it."""
+You are precise, you do not pad, and you never invent facts about the organization. If the page lacks the information needed to answer the query, you say so and describe what content must be created rather than fabricating it. You are also precise about the scope of your own evidence: you only ever assess the page content provided to you, not the live page, so every absence claim you make describes what that provided content does or does not contain — never what the website as a whole does or does not contain."""
 
 
 def build_audit_prompt(
@@ -36,10 +36,11 @@ def build_audit_prompt(
 ) -> str:
     """
     Build the user prompt for a single page audit.
-    Truncates page text to ~3000 tokens to keep cost predictable.
+    Truncates page text to ~6000 tokens (~24,000 characters) to keep cost predictable
+    while covering the visible body copy of most pages in full.
     Optionally includes competitor page snippets (capped at 1500 chars each).
     """
-    trimmed = page_text[:12000]
+    trimmed = page_text[:24000]
 
     competitor_block = ""
     if competitor_snippets:
@@ -87,6 +88,14 @@ page content or marked [ORG TO CONFIRM].>"
 Rules:
 - Output must be parseable by json.loads(). Escape all inner quotes and newlines correctly.
 - Never invent statistics, services, or claims. Mark anything uncertain as [ORG TO CONFIRM: ...].
+- ABSENCE CLAIMS MUST BE SCOPED. In "verdict" and "gaps", you are describing the page content \
+provided above, not the live website. Never use absolute language like "never," "zero," \
+"does not exist," "nowhere," or "impossible" to describe something missing — you cannot see \
+tabs, accordions, JavaScript-rendered sections, or content below what was provided, so an \
+absolute claim can be wrong even when your read of the provided content is correct. Instead, \
+use scoped language: "not visible in the analyzed content," "doesn't surface in the extractable \
+text reviewed," or "the provided content does not address X." This applies to "verdict" and \
+every item in "gaps."
 - The rewritten_section must lead with the answer in the first sentence.
 - CRITICAL SCHEMA RULE: Every question and answer in the faq_schema must only use information \
 that is explicitly visible in the page content provided. Do not include any answer that contains \
