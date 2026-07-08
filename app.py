@@ -645,6 +645,21 @@ if analyze_btn and homepage_url:
     with st.spinner(f"Matching {len(all_queries)} queries to {len(pages)} pages..."):
         matches = crawler.match_queries_to_pages(all_queries, pages, org_name, _KEYS)
 
+    if not pages:
+        st.warning(
+            "No pages were found when crawling this site — check that it isn't blocking "
+            "automated requests and has a working sitemap.xml or crawlable internal links "
+            "from the homepage. Query matching will be blank until this is resolved.",
+            icon="⚠️",
+        )
+    elif all_queries and not any(matches.values()):
+        st.warning(
+            "Page matching came back empty for every query — this usually means the "
+            "AI matching call itself failed (rate limit, timeout, or malformed response), "
+            "not that your site lacks relevant pages. Try clicking Analyze again.",
+            icon="⚠️",
+        )
+
     # Merge tracked queries (always included first) with new discoveries sorted by frequency
     try:
         tracked = db.get_tracked_queries(user["id"], org_name)

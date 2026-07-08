@@ -406,7 +406,12 @@ Return ONLY valid JSON — no markdown, no preamble:
         if raw.startswith("```"):
             raw = raw.split("```")[1].replace("json", "", 1).strip()
         matches = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        # Previously swallowed silently — every query would come back with a
+        # blank matched page and no indication why. Surface it so it's at
+        # least visible in server logs instead of a mystery empty table.
+        print(f"[match_queries_to_pages] matching call failed: {e}")
+        progress(f"⚠️ Page matching failed: {e}")
         return {q: "" for q in queries}
 
     result = {}
