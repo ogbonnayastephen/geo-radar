@@ -283,35 +283,50 @@ def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
         return _citation_error(f"Gemini API error: {e}")
 
     try:
-        answer    = ""
-        citations = []
+        answer  = ""
+        chunks  = []  # [{"uri": ..., "title": ...}] — see note below on why both are kept
 
         for candidate in getattr(response, "candidates", []):
             # Extract answer text
             for part in getattr(candidate.content, "parts", []):
                 answer = answer or getattr(part, "text", "")
 
-            # Extract grounding citations
+            # Extract grounding citations. IMPORTANT: `web.uri` is a Google
+            # redirect URL (vertexaisearch.cloud.google.com/grounding-api-redirect/...),
+            # NOT the actual source URL — it never contains the cited domain
+            # as a substring, so matching against it alone always fails.
+            # `web.title` reliably holds the bare source domain (e.g.
+            # "example.com") per Google's own grounding docs, so that's what
+            # domain-matching must use. `uri` is kept only for display.
             metadata = getattr(candidate, "grounding_metadata", None)
             if metadata:
                 for chunk in getattr(metadata, "grounding_chunks", []):
-                    web = getattr(chunk, "web", None)
-                    uri = getattr(web, "uri", "") if web else ""
-                    if uri:
-                        citations.append(uri)
+                    web   = getattr(chunk, "web", None)
+                    uri   = getattr(web, "uri", "") if web else ""
+                    title = getattr(web, "title", "") if web else ""
+                    if uri or title:
+                        chunks.append({"uri": uri, "title": title})
 
-        seen      = set()
-        citations = [u for u in citations if not (u in seen or seen.add(u))]
+        seen         = set()
+        unique_chunks = []
+        for c in chunks:
+            key = c["uri"] or c["title"]
+            if key not in seen:
+                seen.add(key)
+                unique_chunks.append(c)
 
-        matched = next(
-            (url for url in citations
-             if any(domain.lower() in url.lower() for domain in target_domains)),
+        matched_chunk = next(
+            (c for c in unique_chunks
+             if any(d.lower() in (c["title"] or "").lower()
+                    or d.lower() in (c["uri"] or "").lower()
+                    for d in target_domains)),
             None,
         )
+        citations = [c["uri"] or c["title"] for c in unique_chunks]
 
         return {
-            "cited":         matched is not None,
-            "matched_url":   matched,
+            "cited":         matched_chunk is not None,
+            "matched_url":   (matched_chunk["uri"] or matched_chunk["title"]) if matched_chunk else None,
             "all_citations": citations,
             "answer":        answer,
             "error":         None,
