@@ -255,6 +255,24 @@ def check_citation_google(
     return result
 
 
+def _resolve_google_redirect(uri: str) -> str:
+    """
+    Gemini's grounding chunks return an opaque vertexaisearch.cloud.google.com
+    redirect link, not the actual source URL — resolve it to the real
+    destination so domain-matching and display both work. Falls back to the
+    original uri if it's not a Google redirect, or if resolution fails/times
+    out (these redirects are also reported to expire after a few days, so
+    this must degrade gracefully, not raise).
+    """
+    if not uri or "vertexaisearch.cloud.google.com" not in uri:
+        return uri
+    try:
+        resp = requests.head(uri, allow_redirects=True, timeout=5)
+        return resp.url or uri
+    except requests.exceptions.RequestException:
+        return uri
+
+
 def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
     """Single Gemini citation check call."""
     if not keys.google:
@@ -284,7 +302,7 @@ def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
 
     try:
         answer  = ""
-        chunks  = []  # [{"uri": ..., "title": ...}] — see note below on why both are kept
+        chunks  = []  # [{"uri": ..., "title": ..., "resolved": ...}]
 
         for candidate in getattr(response, "candidates", []):
             # Extract answer text
@@ -295,17 +313,19 @@ def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
             # redirect URL (vertexaisearch.cloud.google.com/grounding-api-redirect/...),
             # NOT the actual source URL — it never contains the cited domain
             # as a substring, so matching against it alone always fails.
-            # `web.title` reliably holds the bare source domain (e.g.
-            # "example.com") per Google's own grounding docs, so that's what
-            # domain-matching must use. `uri` is kept only for display.
+            # `web.title` USUALLY holds the bare source domain, but this isn't
+            # guaranteed by Google's docs for every response — relying on it
+            # alone can still under-match. The reliable fix is to resolve the
+            # redirect to its real destination and match/display that.
             metadata = getattr(candidate, "grounding_metadata", None)
             if metadata:
                 for chunk in getattr(metadata, "grounding_chunks", []):
-                    web   = getattr(chunk, "web", None)
-                    uri   = getattr(web, "uri", "") if web else ""
-                    title = getattr(web, "title", "") if web else ""
+                    web      = getattr(chunk, "web", None)
+                    uri      = getattr(web, "uri", "") if web else ""
+                    title    = getattr(web, "title", "") if web else ""
+                    resolved = _resolve_google_redirect(uri) if uri else ""
                     if uri or title:
-                        chunks.append({"uri": uri, "title": title})
+                        chunks.append({"uri": uri, "title": title, "resolved": resolved})
 
         seen         = set()
         unique_chunks = []
@@ -317,16 +337,18 @@ def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
 
         matched_chunk = next(
             (c for c in unique_chunks
-             if any(d.lower() in (c["title"] or "").lower()
-                    or d.lower() in (c["uri"] or "").lower()
+             if any(d.lower() in (c["resolved"] or "").lower()
+                    or d.lower() in (c["title"] or "").lower()
                     for d in target_domains)),
             None,
         )
-        citations = [c["uri"] or c["title"] for c in unique_chunks]
+        # Prefer the resolved, human-readable URL for display; fall back to
+        # title (bare domain) or, worst case, the opaque redirect link.
+        citations = [c["resolved"] or c["title"] or c["uri"] for c in unique_chunks]
 
         return {
             "cited":         matched_chunk is not None,
-            "matched_url":   (matched_chunk["uri"] or matched_chunk["title"]) if matched_chunk else None,
+            "matched_url":   (matched_chunk["resolved"] or matched_chunk["title"]) if matched_chunk else None,
             "all_citations": citations,
             "answer":        answer,
             "error":         None,
