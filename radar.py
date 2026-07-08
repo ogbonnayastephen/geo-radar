@@ -14,6 +14,7 @@ Keys are passed explicitly as a Keys dataclass — no global os.environ mutation
 
 import json
 import ipaddress
+import time
 import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -34,6 +35,32 @@ REQUEST_TIMEOUT     = 45
 MAX_PAGE_BYTES      = 5 * 1024 * 1024          # refuse pages larger than 5 MB
 
 PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
+
+_RATE_LIMIT_SIGNALS = (
+    "429", "rate limit", "rate_limit", "too many requests",
+    "quota", "resource_exhausted",
+)
+
+
+def _with_retry(fn, max_retries: int = 2, base_delay: float = 1.5):
+    """
+    Call fn() and retry with exponential backoff if the failure looks like a
+    transient rate-limit error (shared API keys under concurrent load hit
+    this far more than a single user ever would). Any other error raises
+    immediately — this is only for smoothing over 429s, not masking real bugs.
+    """
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            is_rate_limit = any(s in msg for s in _RATE_LIMIT_SIGNALS)
+            if not is_rate_limit or attempt == max_retries:
+                raise
+            time.sleep(base_delay * (2 ** attempt))
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +95,13 @@ def _perplexity_once(query: str, target_domains: list[str], keys: Keys) -> dict:
         "max_tokens": 400,
     }
 
-    try:
+    def _do_request():
         resp = requests.post(PERPLEXITY_URL, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
+        return resp
+
+    try:
+        resp = _with_retry(_do_request)
         data = resp.json()
     except requests.exceptions.RequestException as e:
         return _citation_error(f"Perplexity request failed: {e}")
@@ -130,11 +161,11 @@ def _chatgpt_once(query: str, target_domains: list[str], keys: Keys) -> dict:
     client = OpenAI(api_key=keys.openai)
 
     try:
-        response = client.chat.completions.create(
+        response = _with_retry(lambda: client.chat.completions.create(
             model=OPENAI_SEARCH_MODEL,
             messages=[{"role": "user", "content": query}],
             max_tokens=400,
-        )
+        ))
     except Exception as e:
         return _citation_error(f"ChatGPT request failed: {e}")
 
@@ -240,14 +271,14 @@ def _google_once(query: str, target_domains: list[str], keys: Keys) -> dict:
     try:
         client     = google_genai.Client(api_key=keys.google)
         model_name = _resolve_gemini_model(client)
-        response   = client.models.generate_content(
+        response   = _with_retry(lambda: client.models.generate_content(
             model=model_name,
             contents=query,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
                 response_modalities=["TEXT"],
             ),
-        )
+        ))
     except Exception as e:
         return _citation_error(f"Gemini API error: {e}")
 
@@ -523,6 +554,7 @@ def run_audit(
         "google_cited_count":       None,
         "google_sample_count":      1,
         "google_error":             None,
+        "competitor_evidence":      [],
         "readiness_score":          None,
         "verdict":                  "",
         "gaps":                     [],
@@ -585,6 +617,11 @@ def run_audit(
             competitor_snippets.append({"url": url, "snippet": comp["text"]})
         if len(competitor_snippets) >= 2:
             break
+
+    result["competitor_evidence"] = [
+        {"url": c["url"], "snippet": c["snippet"][:400]}
+        for c in competitor_snippets
+    ]
 
     scraped = scrape_page(page_url)
     if not scraped["ok"]:

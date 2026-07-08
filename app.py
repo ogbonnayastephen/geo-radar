@@ -11,6 +11,7 @@ prompt the user for their own keys instead — see the sidebar BYOK block.
 import csv
 import io
 import os
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +48,25 @@ _BUILDER_KEYS_CONFIGURED = bool(_KEYS.anthropic)
 # Set to True to bring back required accounts (Supabase email+password login).
 # Off for now — demos to small businesses should have zero signup friction.
 _REQUIRE_LOGIN = False
+
+# ---------------------------------------------------------------------------
+# Concurrency gate — Streamlit runs every visitor's session in one shared
+# process, with no built-in cap on simultaneous audits. Left unbounded, a
+# demo drawing many concurrent users can exhaust the shared API keys' rate
+# limits and the host's CPU/memory all at once. @st.cache_resource creates
+# this Semaphore ONCE and shares the same object across every session.
+# MAX_CONCURRENT_AUDITS is a guess at what a small hosting tier can sustain —
+# raise it once you know your actual host's headroom.
+# ---------------------------------------------------------------------------
+MAX_CONCURRENT_AUDITS = 3
+
+
+@st.cache_resource
+def _get_audit_semaphore() -> threading.Semaphore:
+    return threading.Semaphore(MAX_CONCURRENT_AUDITS)
+
+
+_AUDIT_SEMAPHORE = _get_audit_semaphore()
 
 db.init()
 
@@ -742,25 +762,37 @@ if st.session_state.audit_table and not st.session_state.audit_done:
             st.warning("Select at least one query to audit.")
             st.stop()
 
-        st.session_state.recheck_results = {}
-        results  = []
-        progress = st.progress(0.0, text="Starting...")
+        with st.spinner("Waiting for available capacity — high demand right now..."):
+            acquired = _AUDIT_SEMAPHORE.acquire(timeout=120)
+        if not acquired:
+            st.error(
+                "The server is at capacity from other people running audits right now. "
+                "Please wait a few minutes and try again."
+            )
+            st.stop()
 
-        for i, row in enumerate(rows):
-            q        = str(row.get("query", "")).strip()
-            page_url = str(row.get("page_url", "")).strip()
-            if not q:
-                continue
-            label = f"({i+1}/{len(rows)}) {q}"
-            if not st.session_state.quick_mode:
-                label += " · 3× confidence"
-            progress.progress(i / len(rows), text=label)
-            results.append(radar.run_audit(q, page_url, target_domains, org_name, _KEYS, n_samples))
-            results[-1]["stage"] = row.get("stage", "")
-            time.sleep(0.2)
+        try:
+            st.session_state.recheck_results = {}
+            results  = []
+            progress = st.progress(0.0, text="Starting...")
 
-        progress.progress(1.0, text="Running synthesis...")
-        synthesis = radar.synthesize_results(results, org_name, _KEYS)
+            for i, row in enumerate(rows):
+                q        = str(row.get("query", "")).strip()
+                page_url = str(row.get("page_url", "")).strip()
+                if not q:
+                    continue
+                label = f"({i+1}/{len(rows)}) {q}"
+                if not st.session_state.quick_mode:
+                    label += " · 3× confidence"
+                progress.progress(i / len(rows), text=label)
+                results.append(radar.run_audit(q, page_url, target_domains, org_name, _KEYS, n_samples))
+                results[-1]["stage"] = row.get("stage", "")
+                time.sleep(0.2)
+
+            progress.progress(1.0, text="Running synthesis...")
+            synthesis = radar.synthesize_results(results, org_name, _KEYS)
+        finally:
+            _AUDIT_SEMAPHORE.release()
 
         st.session_state.audit_results   = results
         st.session_state.audit_synthesis = synthesis
@@ -1085,7 +1117,11 @@ if st.session_state.audit_done and st.session_state.audit_results:
         )
     with dl_pdf:
         try:
-            pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by)
+            try:
+                history = db.get_history(org_name, limit=10, user_id=user.get("id"))
+            except Exception:
+                history = []
+            pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by, history=history)
             st.download_button(
                 "⬇️ Download PDF report",
                 data=pdf_bytes,

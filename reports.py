@@ -2,12 +2,13 @@
 GEO Radar — PDF audit report generator.
 
 Produces a branded, client-ready PDF using reportlab.
-Usage: pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by)
+Usage: pdf_bytes = generate_pdf(org_name, results, synthesis, prepared_by, history)
 Returns bytes suitable for st.download_button(mime="application/pdf").
 """
 
 from io import BytesIO
 from datetime import datetime
+from xml.sax.saxutils import escape as _esc
 
 from radar import cite_confidence_for
 
@@ -24,6 +25,7 @@ def generate_pdf(
     results: list[dict],
     synthesis: dict | None,
     prepared_by: str = "GEO Radar",
+    history: list[dict] | None = None,
 ) -> bytes:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -66,6 +68,8 @@ def generate_pdf(
     quote_s  = ps("QT", fontSize=10, textColor=dark,   leading=14, spaceAfter=3,
                    leftIndent=12, borderPad=4,
                    backColor=colors.HexColor("#EEF2FF"))
+    code_s   = ps("CD", fontSize=8, textColor=dark, leading=11, fontName="Courier",
+                   backColor=colors.HexColor("#F3F4F6"), borderPad=6, leftIndent=6)
 
     def hr():
         return HRFlowable(width="100%", thickness=0.5, color=border, spaceAfter=8, spaceBefore=8)
@@ -85,6 +89,13 @@ def generate_pdf(
     def badge(r, engine):
         """Same confidence text as the live UI and CSV — kept in sync deliberately."""
         return cite_confidence_for(r, engine)
+
+    def readiness_label(score):
+        if score is None: return ""
+        if score >= 80: return "Strong"
+        if score >= 50: return "OK"
+        if score >= 25: return "Weak"
+        return "Critical"
 
     story = []
 
@@ -134,6 +145,19 @@ def generate_pdf(
     story.append(metrics_tbl)
     story.append(Spacer(1, 0.3 * inch))
 
+    # ── PROGRESS OVER TIME ───────────────────────────────────────────────────
+    if history and len(history) >= 2:
+        story.append(Paragraph("Progress Over Time", h2_s))
+        hist_rows = [["Date", "Queries", "Cited", "Citation Rate"]]
+        for h in reversed(history):  # oldest first
+            qc, cc = h.get("query_count") or 0, h.get("cited_count") or 0
+            rate = f"{round(cc / qc * 100)}%" if qc else "0%"
+            hist_rows.append([h.get("created_at", "")[:10], str(qc), str(cc), rate])
+        hist_tbl = Table(hist_rows, colWidths=[1.75 * inch, 1.75 * inch, 1.75 * inch, 1.75 * inch])
+        hist_tbl.setStyle(tbl_style())
+        story.append(hist_tbl)
+        story.append(Spacer(1, 0.2 * inch))
+
     # ── METHODOLOGY & LIMITATIONS ────────────────────────────────────────────
     story.append(Paragraph("Methodology & Limitations", h2_s))
     story.append(Paragraph(
@@ -173,19 +197,20 @@ def generate_pdf(
 
     rows = [["Query", "Perplexity", "ChatGPT", "Google AI", "Score", "Verdict"]]
     for r in results:
-        score = f"{r['readiness_score']}/100" if r.get("readiness_score") is not None else "—"
+        score = (f"{r['readiness_score']}/100 — {readiness_label(r['readiness_score'])}"
+                  if r.get("readiness_score") is not None else "—")
         rows.append([
             Paragraph(r.get("query", ""), ps("QC", fontSize=9)),
             badge(r, "perplexity"),
             badge(r, "chatgpt"),
             badge(r, "google"),
-            score,
+            Paragraph(score, ps("SC", fontSize=8)),
             Paragraph((r.get("verdict") or "")[:100], ps("VC", fontSize=9)),
         ])
 
     results_tbl = Table(
         rows,
-        colWidths=[2.1 * inch, 0.85 * inch, 0.75 * inch, 0.85 * inch, 0.6 * inch, 1.85 * inch],
+        colWidths=[1.9 * inch, 0.85 * inch, 0.75 * inch, 0.85 * inch, 0.9 * inch, 1.75 * inch],
     )
     results_tbl.setStyle(tbl_style())
     story.append(results_tbl)
@@ -210,7 +235,7 @@ def generate_pdf(
                 f"Perplexity {badge(r, 'perplexity')}  "
                 f"ChatGPT {badge(r, 'chatgpt')}  "
                 f"Google AI {badge(r, 'google')}  "
-                f"Score {r.get('readiness_score', '—')}/100",
+                f"Score {r.get('readiness_score', '—')}/100 — {readiness_label(r.get('readiness_score'))}",
                 small_s,
             ))
 
@@ -230,6 +255,16 @@ def generate_pdf(
                 block.append(Paragraph("<b>Suggested question-phrased headings:</b>", body_s))
                 for h in (r["suggested_headings"] or []):
                     block.append(Paragraph(f"• {h}", body_s))
+
+            if r.get("competitor_evidence"):
+                block.append(Paragraph("<b>Evidence — who's being cited instead:</b>", body_s))
+                for comp in r["competitor_evidence"]:
+                    block.append(Paragraph(f"<b>{_esc(comp['url'])}</b>", small_s))
+                    block.append(Paragraph(_esc(comp["snippet"]), quote_s))
+
+            if r.get("faq_schema"):
+                block.append(Paragraph("<b>FAQ schema — ready to paste into &lt;head&gt;:</b>", body_s))
+                block.append(Paragraph(_esc(r["faq_schema"]), code_s))
 
             block.append(hr())
             story.append(KeepTogether(block[:6]))  # keep heading + first few items together
