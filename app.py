@@ -1,8 +1,9 @@
 """
-GEO Radar — Streamlit UI (URL-first, confidence-default SaaS).
+GEO Radar — Streamlit UI (URL-first, quick-check-default SaaS).
 
 One URL → everything auto-discovered.
-Citation checks always run 3× samples and show confidence bands.
+Citation checks run 1× per engine by default to save API spend; users can
+opt into 3× confidence-band sampling via the "Quick check" sidebar toggle.
 Managed deployments read API keys from env / Streamlit Secrets.
 Unconfigured deployments (e.g. a bare clone of the open-source repo)
 prompt the user for their own keys instead — see the sidebar BYOK block.
@@ -139,7 +140,7 @@ _DEFAULTS = {
     "audit_results":   [],
     "audit_synthesis": {},
     "recheck_results": {},
-    "quick_mode":      False,  # True = 1× samples; False (default) = 3×
+    "quick_mode":      True,   # True (default) = 1× samples, saves API spend; False = 3× confidence mode
     "stale_checked":   False,
     "stale_orgs":      [],
     "signup_pending":  False,
@@ -962,11 +963,23 @@ if st.session_state.audit_done and st.session_state.audit_results:
 
     if needs_fixes:
         st.markdown("### Fixes")
+        _used_confidence = any(
+            r.get("perplexity_sample_count", 1) > 1
+            or r.get("chatgpt_sample_count", 1) > 1
+            or r.get("google_sample_count", 1) > 1
+            for r in results
+        )
+        _confidence_note = (
+            "Citation results are sampled across multiple runs and shown as a confidence band "
+            "because live AI answers can vary run to run."
+            if _used_confidence else
+            "Citation results reflect a single sample per engine (Quick check mode) — live AI "
+            "answers can vary run to run, so re-testing with confidence mode may show a different result."
+        )
         st.caption(
             "Gap findings describe the page content this audit reviewed (first ~24,000 "
             "characters of visible text, no JavaScript execution) — verify against the live "
-            "page before sharing externally. Citation results are sampled across multiple runs "
-            "and shown as a confidence band because live AI answers can vary run to run."
+            f"page before sharing externally. {_confidence_note}"
         )
         for i, r in enumerate(needs_fixes):
             score_part  = f"  ·  readiness {r['readiness_score']}/100" if r.get("readiness_score") else ""
