@@ -26,6 +26,13 @@ from radar import is_safe_url
 
 REQUEST_TIMEOUT = 15
 
+# Hard wall-clock cap on page-fetching loops. Page-count limits (max_pages)
+# don't bound total time — a slow or bot-protected site can silently make
+# every request eat the full REQUEST_TIMEOUT, turning a 150-300 page crawl
+# into 30-75+ minutes. This ensures a crawl always finishes in a reasonable
+# time, gracefully using whatever pages it managed to fetch so far.
+MAX_CRAWL_SECONDS = 60
+
 HEADERS = {"User-Agent": "Mozilla/5.0 (GEO-Radar site crawler; research tool)"}
 
 # URL path segments that almost never contain auditable content
@@ -146,7 +153,11 @@ def _fetch_pages_from_urls(
             progress_callback(msg)
 
     pages = []
+    start = time.monotonic()
     for i, url in enumerate(urls[:max_pages]):
+        if time.monotonic() - start > MAX_CRAWL_SECONDS:
+            progress(f"Crawl time budget reached — using the {len(pages)} pages fetched so far.")
+            break
         safe, _ = is_safe_url(url)
         if not safe:
             continue
@@ -197,7 +208,11 @@ def crawl_site(homepage_url: str, max_pages: int = 150, progress_callback=None) 
 
     progress(f"No sitemap found. Crawling {base_domain} via link-following...")
 
+    start = time.monotonic()
     while to_visit and len(pages) < max_pages:
+        if time.monotonic() - start > MAX_CRAWL_SECONDS:
+            progress(f"Crawl time budget reached — using the {len(pages)} pages found so far.")
+            break
         url       = to_visit.popleft()
         clean_url = url.split("#")[0].rstrip("/")
         if clean_url in visited:
@@ -307,7 +322,7 @@ def auto_extract_business_info(homepage_url: str, keys: Keys) -> dict:
         return {**fallback, "org_name": og_name or title or domain}
 
     try:
-        client = Anthropic(api_key=keys.anthropic)
+        client = Anthropic(api_key=keys.anthropic, timeout=45.0)
         prompt = f"""Read this homepage content and extract key business information.
 
 Page title: {title}
@@ -366,7 +381,7 @@ def match_queries_to_pages(
     if not keys.anthropic or not pages:
         return {q: "" for q in queries}
 
-    client = Anthropic(api_key=keys.anthropic)
+    client = Anthropic(api_key=keys.anthropic, timeout=45.0)
 
     site_map = [
         {
