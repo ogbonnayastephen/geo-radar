@@ -694,7 +694,7 @@ if analyze_btn and homepage_url:
     ]
     _merged_new = sorted(
         [
-            {"include": True, "query": q, "page_url": matches.get(q, ""),
+            {"include": False, "query": q, "page_url": matches.get(q, ""),
              "stage": f"{_STAGE_EMOJI.get(stage_map.get(q, ''), '')} {stage_map.get(q, '').capitalize()}".strip(),
              "freq":  freq_map.get(q, 1)}
             for q in all_queries
@@ -705,7 +705,7 @@ if analyze_btn and homepage_url:
     merged = _merged_tracked + _merged_new
 
     st.session_state.audit_table   = merged if merged else [
-        {"include": True, "query": q, "page_url": matches.get(q, ""), "stage": "", "freq": 1}
+        {"include": False, "query": q, "page_url": matches.get(q, ""), "stage": "", "freq": 1}
         for q in all_queries
     ]
     st.session_state.using_tracked = bool(tracked)
@@ -739,8 +739,10 @@ if st.session_state.audit_table and not st.session_state.audit_done:
         )
     else:
         st.caption(
-            "All queries selected — sorted by search frequency (🔥🔥🔥 = appeared across many search variations). "
-            "Verify matched pages, uncheck any to skip, then **Run audit**."
+            "Select the queries you want to check — sorted by search frequency "
+            "(🔥🔥🔥 = appeared across many search variations). Only checked rows "
+            "run and count toward API cost, so pick the ones worth spending on, "
+            "then **Run audit**."
         )
 
     df = pd.DataFrame(st.session_state.audit_table)
