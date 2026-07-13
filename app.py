@@ -204,6 +204,11 @@ with st.sidebar:
     if st.session_state.user:
         user      = st.session_state.user
         is_guest  = user.get("email") == "guest@geo-radar.local"
+        # True only for a real, distinct authenticated identity — false for
+        # guest sessions AND the shared "local-dev" fallback used when
+        # Supabase isn't configured, since either case means this visitor
+        # could otherwise see or select another visitor's client data.
+        _is_real_identity = not is_guest and user.get("id") != "local-dev"
         if not is_guest:
             st.caption(f"👤 {user['email']}")
         if st.button("🔄 Start over" if is_guest else "Log out", use_container_width=True):
@@ -220,7 +225,7 @@ with st.sidebar:
 
         # ── Past client switcher ──────────────────────────────────────────
         try:
-            past_orgs = db.get_user_orgs(user["id"])
+            past_orgs = db.get_user_orgs(user["id"]) if _is_real_identity else []
         except Exception:
             past_orgs = []
 
@@ -493,6 +498,15 @@ user        = st.session_state.user
 n_samples   = 1 if st.session_state.quick_mode else 3
 prepared_by = "GEO Radar"  # re-read from sidebar if it was set above
 
+# True only for a real, distinct authenticated identity — false for guest
+# sessions AND the shared "local-dev" fallback used when Supabase isn't
+# configured, since either case means this visitor could otherwise see
+# another visitor's client names, history, or overview data.
+_is_real_identity = (
+    user.get("email") not in ("guest@geo-radar.local", "dev@localhost")
+    and user.get("id") != "local-dev"
+)
+
 st.title("📡 GEO Radar")
 st.caption("Enter your website URL — we'll discover real queries, map your pages, and check all three AI engines.")
 
@@ -501,7 +515,7 @@ st.caption("Enter your website URL — we'll discover real queries, map your pag
 # ---------------------------------------------------------------------------
 if not st.session_state.stale_checked:
     try:
-        st.session_state.stale_orgs = db.get_stale_orgs(user["id"], days=14)
+        st.session_state.stale_orgs = db.get_stale_orgs(user["id"], days=14) if _is_real_identity else []
     except Exception:
         st.session_state.stale_orgs = []
     st.session_state.stale_checked = True
@@ -514,10 +528,15 @@ for stale in st.session_state.stale_orgs:
     )
 
 # ---------------------------------------------------------------------------
-# CLIENT OVERVIEW — all-clients summary
+# CLIENT OVERVIEW — all-clients summary. Owner-only: this must never render
+# for a guest session or the shared "local-dev" fallback identity (used when
+# Supabase isn't configured), since either case means the visitor isn't a
+# real, distinct authenticated identity — showing this to them would leak
+# every other user's client history, since they'd all share one bucket.
+# (_is_real_identity computed above, right after `user` is resolved.)
 # ---------------------------------------------------------------------------
 try:
-    _dash_summary = db.get_all_orgs_summary(user["id"])
+    _dash_summary = db.get_all_orgs_summary(user["id"]) if _is_real_identity else []
 except Exception:
     _dash_summary = []
 
